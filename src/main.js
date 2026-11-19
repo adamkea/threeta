@@ -63,7 +63,8 @@ const traffic = new TrafficSystem(scene, rng, lights);
 const npcs = new NpcManager(scene, rng);
 const skids = new SkidMarks(scene, groundHeight);
 
-const playerPed = new Pedestrian({ shirt: 0xf5f5f5, pants: 0x23262e });
+// The player: brown leather jacket over a white tee, no hat, so they never blend into a crowd.
+const playerPed = new Pedestrian({ shirt: 0x6b3f22, inner: 0xf5f5f5, pants: 0x23262e, hair: 0x1a120c, chain: true });
 scene.add(playerPed.mesh);
 const player = new PlayerController({ ped: playerPed, car: playerCar, traffic, npcs, scene });
 

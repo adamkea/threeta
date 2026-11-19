@@ -3,11 +3,9 @@ import { Pedestrian } from './Pedestrian.js';
 import { groundHeight } from '../world/City.js';
 import { SIZE, coord, crossingOf, isValid, nearestIndex, neighbours } from './Sidewalks.js';
 
+import { civilianLook, rollPerson } from './outfits.js';
+
 const STAND = new THREE.Vector2();
-const SHIRTS = [0xc0392b, 0x2e86c1, 0xf1c40f, 0x27ae60, 0x8e44ad, 0xecf0f1, 0x34495e, 0xe67e22, 0x16a085, 0xd35d8c];
-const PANTS = [0x2b2f3a, 0x4a3b2a, 0x1f3550, 0x5a5a5a, 0x7a6a4f, 0x222222];
-const SKINS = [0xf1d0b5, 0xe0b48f, 0xc68e64, 0x8d5a3b, 0x5c3a24];
-const HAIR = [0x2a1c14, 0x111111, 0x6b4a2f, 0xc9a35b, 0x8a8a8a, 0x9b3b1e];
 
 const SCARE_RADIUS = 14; // people this close to someone getting run over panic
 const CROSS_GREEN_NEEDED = 4; // seconds of green left needed to start crossing
@@ -47,7 +45,7 @@ export class NpcManager {
 
   /** Spawn a panicked ex-driver at (x, z) who runs away from `threat` and from the car they left. */
   spawnFleeing(x, z, threat, car) {
-    const n = this.#acquire();
+    const n = this.#acquire({ role: 'civilian', gang: null, look: civilianLook(this.rng) });
     n.ped.reset(x, z);
     const fromThreat = new THREE.Vector2(x - threat.x, z - threat.y);
     const fromCar = new THREE.Vector2(x - car.x, z - car.y).normalize();
@@ -254,7 +252,8 @@ export class NpcManager {
 
   // --- Pool ---
 
-  #acquire() {
+  /** `person` = { role, gang, look } (see outfits.js rollPerson). */
+  #acquire(person) {
     let n = this.npcs.find((x) => !x.active);
     if (!n) {
       const ped = new Pedestrian();
@@ -263,17 +262,16 @@ export class NpcManager {
       this.npcs.push(n);
     }
     const rng = this.rng;
-    n.ped.setLook({
-      shirt: rng.pick(SHIRTS),
-      pants: rng.pick(PANTS),
-      skin: rng.pick(SKINS),
-      hair: rng.pick(HAIR),
-      scale: rng.range(0.9, 1.08),
-    });
+    n.ped.setLook(person.look);
+    n.ped.role = person.role;
+    n.ped.gang = person.gang;
     Object.assign(n, {
       active: true,
+      role: person.role,
+      gang: person.gang,
       inset: rng.range(1.8, 2.4),
-      pace: rng.range(0.6, 0.85),
+      // Cops walk a brisk beat; gang members take their time on their own turf.
+      pace: person.role === 'cop' ? rng.range(0.8, 0.95) : person.role === 'gang' ? rng.range(0.5, 0.65) : rng.range(0.6, 0.85),
       state: 'walk',
       stateTime: 0,
       stuck: 0,
@@ -311,7 +309,7 @@ export class NpcManager {
       if (dist < minD || dist > maxD) continue;
       if (this.npcs.some((o) => o.active && o.ped.position.distanceToSquared(_v.set(x, z)) < 4)) continue;
 
-      const n = this.#acquire();
+      const n = this.#acquire(rollPerson(this.rng, x, z));
       n.inset = inset;
       n.ped.reset(x, z, Math.atan2(to[0] - ix, to[1] - iz));
       n.from = [ix, iz];

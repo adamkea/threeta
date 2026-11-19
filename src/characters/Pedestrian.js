@@ -2,20 +2,91 @@ import * as THREE from 'three';
 import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeometry.js';
 import { toon } from '../render/toon.js';
 
+/** Smooth solid of revolution from (radius, y) pairs, squashed front-to-back by `depth`. */
+function lathe(profile, depth = 1, segments = 24) {
+  const pts = profile.map(([r, y]) => new THREE.Vector2(r, y));
+  return new THREE.LatheGeometry(pts, segments).scale(1, 1, depth);
+}
+
+/** Limb segment hanging down from its pivot: rounded ends, tapering from `r0` to `r1`. */
+function taperedLimb(len, r0, r1) {
+  const pts = [];
+  const steps = 6;
+  for (let k = 0; k <= steps; k++) {
+    const a = (k / steps) * (Math.PI / 2);
+    pts.push([Math.sin(a) * r0, -r0 + Math.cos(a) * r0]); // top cap
+  }
+  for (let k = steps; k >= 0; k--) {
+    const a = (k / steps) * (Math.PI / 2);
+    pts.push([Math.sin(a) * r1, -len + r1 - Math.cos(a) * r1]); // bottom cap
+  }
+  return lathe(pts.reverse(), 0.92, 16); // lathe profiles run bottom-up so normals face out
+}
+
+const TORSO_DEPTH = 0.62; // torso is an ellipse in cross-section, not a barrel
+const THIGH = 0.42; // upper leg length (knee pivot)
+const SHIN = 0.4;
+const UPPER_ARM = 0.27;
+const FOREARM = 0.25;
+
 let sharedGeo = null;
-/** Rounded body parts, shared by every person. */
+/** Smooth body parts, shared by every person. */
 function pedGeometry() {
   if (sharedGeo) return sharedGeo;
   sharedGeo = {
-    leg: new THREE.CapsuleGeometry(0.11, 0.8 - 0.22, 4, 10),
-    arm: new THREE.CapsuleGeometry(0.08, 0.52 - 0.16, 4, 10),
-    hand: new THREE.SphereGeometry(0.09, 10, 8),
-    shoe: new THREE.SphereGeometry(0.12, 10, 8).scale(1, 0.6, 1.5),
-    chest: new RoundedBoxGeometry(0.62, 0.62, 0.36, 4, 0.15),
-    hips: new RoundedBoxGeometry(0.5, 0.2, 0.32, 3, 0.09),
-    head: new THREE.SphereGeometry(0.25, 16, 12),
-    hair: new THREE.SphereGeometry(0.265, 16, 10, 0, Math.PI * 2, 0, Math.PI * 0.55),
-    nose: new THREE.SphereGeometry(0.05, 8, 6),
+    thigh: taperedLimb(THIGH + 0.06, 0.125, 0.1),
+    shin: taperedLimb(SHIN, 0.1, 0.075),
+    upperArm: taperedLimb(UPPER_ARM + 0.05, 0.09, 0.075),
+    forearm: taperedLimb(FOREARM, 0.075, 0.062),
+    hand: new THREE.SphereGeometry(0.085, 14, 10).scale(0.85, 1.1, 0.95),
+    // Shoe: a rounded wedge, longer in front of the ankle than behind.
+    shoe: new THREE.SphereGeometry(0.11, 16, 10, 0, Math.PI * 2, 0, Math.PI * 0.55).scale(1, 0.9, 1.6),
+    // Chest tapers from broad shoulders to a narrower waist.
+    chest: lathe(
+      [
+        [0, -0.2], [0.21, -0.19], [0.235, -0.12], [0.245, -0.02], [0.27, 0.08], [0.295, 0.18],
+        [0.3, 0.25], [0.275, 0.32], [0.21, 0.375], [0.11, 0.4], [0, 0.405],
+      ],
+      TORSO_DEPTH,
+    ),
+    hips: lathe([[0, -0.37], [0.15, -0.365], [0.225, -0.32], [0.25, -0.24], [0.24, -0.15], [0, -0.13]], 0.72),
+    neck: new THREE.CylinderGeometry(0.085, 0.1, 0.16, 14),
+    head: new THREE.SphereGeometry(0.25, 24, 18).scale(0.96, 1.04, 1),
+    ear: new THREE.SphereGeometry(0.05, 10, 8).scale(0.6, 1, 1),
+    hair: new THREE.SphereGeometry(0.265, 24, 12, 0, Math.PI * 2, 0, Math.PI * 0.55),
+    nose: new THREE.SphereGeometry(0.05, 10, 8),
+    // --- Clothing & accessories ---
+    placket: new RoundedBoxGeometry(0.22, 0.58, 0.06, 2, 0.03), // shirt showing through an open jacket
+    neckline: new THREE.SphereGeometry(0.15, 16, 10).scale(1, 0.75, 0.75), // shirt showing at an open neck
+    // Jacket collar: round the back of the neck, open at the front.
+    collar: new THREE.TorusGeometry(0.13, 0.04, 8, 20, Math.PI * 2 - 1.8)
+      .rotateX(Math.PI / 2)
+      .rotateY(-(Math.PI / 2 + 0.9))
+      .scale(1.15, 1, 0.85),
+    // Police cap: wide flat crown (reads as a disc from above), black band, peak and badge.
+    capCrown: new THREE.CylinderGeometry(0.33, 0.27, 0.13, 20),
+    capBand: new THREE.CylinderGeometry(0.275, 0.275, 0.08, 20),
+    peak: new THREE.CylinderGeometry(0.19, 0.19, 0.03, 16, 1, false, -Math.PI / 2, Math.PI).scale(1.15, 1, 1),
+    capBadge: new RoundedBoxGeometry(0.1, 0.09, 0.03, 1, 0.012),
+    // Baseball cap: dome + bill.
+    dome: new THREE.SphereGeometry(0.272, 16, 8, 0, Math.PI * 2, 0, Math.PI * 0.5),
+    bill: new THREE.CylinderGeometry(0.17, 0.17, 0.025, 16, 1, false, -Math.PI / 2, Math.PI).scale(1.1, 1, 1.25),
+    pompom: new THREE.SphereGeometry(0.085, 10, 8),
+    tail: new RoundedBoxGeometry(0.07, 0.22, 0.03, 1, 0.012),
+    // Hood: a big open-fronted shell around the head.
+    hood: new THREE.SphereGeometry(0.33, 18, 12, Math.PI / 2 + 0.95, Math.PI * 2 - 1.9, 0, Math.PI * 0.72),
+    mask: new THREE.SphereGeometry(0.262, 14, 6, Math.PI / 2 - 1.25, 2.5, Math.PI * 0.53, Math.PI * 0.3),
+    glasses: new RoundedBoxGeometry(0.36, 0.08, 0.06, 1, 0.02),
+    chain: new THREE.TorusGeometry(0.16, 0.022, 6, 20).rotateX(Math.PI / 2 - 0.5),
+    badge: new RoundedBoxGeometry(0.11, 0.13, 0.03, 1, 0.015),
+    epaulette: new RoundedBoxGeometry(0.2, 0.05, 0.16, 1, 0.02),
+    radio: new RoundedBoxGeometry(0.09, 0.14, 0.06, 1, 0.02),
+    belt: new THREE.CylinderGeometry(0.252, 0.247, 0.08, 24).scale(1, 1, 0.74),
+    buckle: new RoundedBoxGeometry(0.1, 0.07, 0.03, 1, 0.01),
+    holster: new RoundedBoxGeometry(0.08, 0.18, 0.14, 1, 0.03),
+    thighStripe: new RoundedBoxGeometry(0.03, THIGH - 0.02, 0.07, 1, 0.012),
+    shinStripe: new RoundedBoxGeometry(0.03, SHIN - 0.08, 0.06, 1, 0.012),
+    armStripe: new RoundedBoxGeometry(0.03, UPPER_ARM - 0.02, 0.055, 1, 0.012),
   };
   for (const g of Object.values(sharedGeo)) g.userData.shared = true;
   return sharedGeo;
@@ -27,6 +98,17 @@ const ACCEL = 30;
 const RADIUS = 0.4;
 const BASE_SCALE = 1.35; // exaggerated so people read clearly from the high camera
 
+// Accessory colours shared by everyone.
+let sharedMats = null;
+function accessoryMats() {
+  sharedMats ??= {
+    gold: toon({ color: 0xf2c230 }),
+    black: toon({ color: 0x141416 }),
+    lens: toon({ color: 0x101418 }),
+  };
+  return sharedMats;
+}
+
 export { WALK_SPEED, RUN_SPEED };
 
 /**
@@ -34,7 +116,7 @@ export { WALK_SPEED, RUN_SPEED };
  * Vector2 on the XZ plane, heading 0 faces +Z, forward = (sin h, cos h).
  */
 export class Pedestrian {
-  constructor({ shirt = 0x3b6fd1, pants = 0x2b2f3a, skin = 0xe0b48f, hair = 0x2a1c14 } = {}) {
+  constructor(look = {}) {
     this.position = new THREE.Vector2();
     this.velocity = new THREE.Vector2();
     this.heading = 0;
@@ -45,16 +127,68 @@ export class Pedestrian {
     this.stride = 0;
     this.groundY = 0;
     this.justKnocked = false; // set on knockdown; observers (e.g. NpcManager) clear it
-    this.mesh = this.#buildMesh(shirt, pants, skin, hair);
+    this.mesh = this.#buildMesh();
+    this.setLook(look);
   }
 
-  /** Recolour in place (lets pooled NPCs get a new look without rebuilding the mesh). */
-  setLook({ shirt, pants, skin, hair, scale = 1 }) {
-    this.mats.shirt.color.set(shirt);
-    this.mats.pants.color.set(pants);
-    this.mats.skin.color.set(skin);
-    this.mats.hair.color.set(hair);
+  /**
+   * Dress in place (lets pooled NPCs get a new look without rebuilding the mesh).
+   * See outfits.js for the fields.
+   */
+  setLook(look) {
+    const {
+      shirt = 0x3b6fd1,
+      inner = null,
+      sleeves = shirt,
+      pants = 0x2b2f3a,
+      shoes = 0x1b1a1c,
+      skin = 0xe0b48f,
+      hair = 0x2a1c14,
+      hat = null,
+      glasses = false,
+      mask = null,
+      chain = false,
+      badge = false,
+      epaulettes = null,
+      radio = false,
+      belt = null,
+      stripes = null,
+      scale = 1,
+    } = look;
+    const m = this.mats;
+    const a = this.acc;
+    m.shirt.color.set(shirt);
+    m.inner.color.set(inner ?? shirt);
+    m.sleeve.color.set(sleeves);
+    m.pants.color.set(pants);
+    m.shoe.color.set(shoes);
+    m.skin.color.set(skin);
+    m.hair.color.set(hair);
     this.mesh.scale.setScalar(BASE_SCALE * scale);
+
+    a.placket.visible = a.collar.visible = inner !== null;
+    a.chain.visible = chain;
+    a.badge.visible = badge;
+    a.radio.visible = radio;
+    a.glasses.visible = glasses;
+    for (const e of a.epaulettes) e.visible = epaulettes !== null;
+    if (epaulettes !== null) m.epaulette.color.set(epaulettes);
+    a.belt.visible = belt !== null;
+    a.holster.visible = belt !== null && badge;
+    if (belt !== null) m.belt.color.set(belt);
+    for (const st of a.stripes) st.visible = stripes !== null;
+    if (stripes !== null) m.stripe.color.set(stripes);
+    a.mask.visible = mask !== null;
+    if (mask !== null) m.mask.color.set(mask);
+
+    for (const [type, g] of Object.entries(a.hats)) g.visible = hat?.type === type;
+    // Hats that cover the whole crown hide the hair; caps leave a fringe showing.
+    this.hairMesh.visible = !hat || hat.type === 'cap' || hat.type === 'police';
+    if (hat) {
+      m.hat.color.set(hat.color);
+      m.hatTrim.color.set(hat.trim ?? hat.color);
+      a.hats.cap.rotation.y = hat.backwards ? Math.PI : 0;
+    }
   }
 
   get speed() {
@@ -148,72 +282,154 @@ export class Pedestrian {
     this.body.position.y = this.fall * 0.25;
 
     const s = this.isDown ? 0 : Math.min(1, this.speed / WALK_SPEED);
-    const swing = Math.sin(this.stride * 2.4) * 0.8 * s;
+    const phase = this.stride * 2.4;
+    const swing = Math.sin(phase) * 0.7 * s;
+    const c = Math.cos(phase);
     this.legL.rotation.x = swing;
     this.legR.rotation.x = -swing;
+    // Knees bend while each leg swings through; elbows stay a little bent and pump with the stride.
+    this.kneeL.rotation.x = 0.06 + Math.max(0, -c) * 1.0 * s;
+    this.kneeR.rotation.x = 0.06 + Math.max(0, c) * 1.0 * s;
     this.armL.rotation.x = -swing * 0.8;
     this.armR.rotation.x = swing * 0.8;
-    this.torso.position.y = 1.15 + Math.abs(Math.cos(this.stride * 2.4)) * 0.05 * s;
+    this.elbowL.rotation.x = -0.18 - (0.25 + Math.max(0, swing)) * 0.5 * s;
+    this.elbowR.rotation.x = -0.18 - (0.25 + Math.max(0, -swing)) * 0.5 * s;
+    this.torso.position.y = 1.15 + Math.abs(c) * 0.05 * s;
+    this.torso.rotation.y = swing * 0.12; // shoulders counter-rotate a touch
   }
 
-  #buildMesh(shirt, pants, skin, hair) {
+  #buildMesh() {
     const root = new THREE.Group();
     root.scale.setScalar(BASE_SCALE);
     const body = new THREE.Group(); // pivots at the feet for falling over
     root.add(body);
     this.body = body;
-    const mat = (c) => toon({ color: c });
-    this.mats = { shirt: mat(shirt), pants: mat(pants), skin: mat(skin), hair: mat(hair) };
+    const mat = () => toon({ color: 0xffffff });
+    const m = (this.mats = {
+      shirt: mat(), // outer torso (jacket when open)
+      inner: mat(), // shirt under an open jacket
+      sleeve: mat(),
+      pants: mat(),
+      shoe: mat(),
+      skin: mat(),
+      hair: mat(),
+      hat: toon({ color: 0xffffff, side: THREE.DoubleSide }),
+      hatTrim: mat(),
+      mask: toon({ color: 0xffffff, side: THREE.DoubleSide }),
+      epaulette: mat(),
+      belt: mat(),
+      stripe: mat(),
+    });
+    const S = accessoryMats();
     const G = pedGeometry();
-    const part = (geo, m) => {
-      const mesh = new THREE.Mesh(geo, m);
+    const part = (geo, mt, x = 0, y = 0, z = 0) => {
+      const mesh = new THREE.Mesh(geo, mt);
+      mesh.position.set(x, y, z);
       mesh.castShadow = true;
       return mesh;
     };
+    const acc = (this.acc = { stripes: [], epaulettes: [] });
 
-    // Limbs hang from pivots at hip/shoulder height so rotation.x swings them.
-    const limb = (x, y, geo, len, m, hand) => {
-      const pivot = new THREE.Group();
-      pivot.position.set(x, y, 0);
-      const p = part(geo, m);
-      p.position.y = -len / 2;
-      pivot.add(p);
-      if (hand) {
-        const h = part(G.hand, this.mats.skin);
-        h.position.y = -len - 0.02;
-        pivot.add(h);
-      } else {
-        const shoe = part(G.shoe, this.mats.shoe);
-        shoe.position.set(0, -len + 0.04, 0.05);
-        pivot.add(shoe);
-      }
-      return pivot;
+    const stripe = (geo, x, y) => {
+      const st = part(geo, m.stripe, x, y, 0);
+      acc.stripes.push(st);
+      return st;
     };
-    this.mats.shoe = toon({ color: 0x1b1a1c });
-    this.legL = limb(0.14, 0.85, G.leg, 0.8, this.mats.pants);
-    this.legR = limb(-0.14, 0.85, G.leg, 0.8, this.mats.pants);
+    // Two-segment limbs: hip/shoulder pivot swings the whole limb, knee/elbow pivot bends it.
+    const leg = (x) => {
+      const out = Math.sign(x);
+      const hip = new THREE.Group();
+      hip.position.set(x, 0.85, 0);
+      const knee = new THREE.Group();
+      knee.position.y = -THIGH;
+      hip.add(part(G.thigh, m.pants), stripe(G.thighStripe, out * 0.11, -THIGH / 2), knee);
+      const shoe = part(G.shoe, m.shoe, 0, -SHIN - 0.02, 0.06);
+      knee.add(part(G.shin, m.pants), stripe(G.shinStripe, out * 0.088, -SHIN / 2), shoe);
+      return [hip, knee];
+    };
+    const arm = (x) => {
+      const out = Math.sign(x);
+      const shoulder = new THREE.Group();
+      shoulder.position.set(x, 0.3, 0);
+      const elbow = new THREE.Group();
+      elbow.position.y = -UPPER_ARM;
+      shoulder.add(part(G.upperArm, m.sleeve), stripe(G.armStripe, out * 0.08, -UPPER_ARM / 2), elbow);
+      elbow.add(part(G.forearm, m.sleeve), part(G.hand, m.skin, 0, -FOREARM - 0.03, 0));
+      return [shoulder, elbow];
+    };
+    [this.legL, this.kneeL] = leg(0.13);
+    [this.legR, this.kneeR] = leg(-0.13);
     body.add(this.legL, this.legR);
 
     const torso = new THREE.Group();
     torso.position.y = 1.15;
     this.torso = torso;
     body.add(torso);
-    const shirtMat = this.mats.shirt;
-    const chest = part(G.chest, shirtMat);
-    chest.position.y = 0.05;
-    const hips = part(G.hips, this.mats.pants);
-    hips.position.y = -0.24;
-    const head = part(G.head, this.mats.skin); // big round comic head
-    head.position.y = 0.62;
-    const hairMesh = part(G.hair, this.mats.hair);
-    hairMesh.position.set(0, 0.64, -0.02);
+    const head = part(G.head, m.skin, 0, 0.62, 0); // big round comic head
+    head.add(part(G.ear, m.skin, 0.235, -0.02, -0.01), part(G.ear, m.skin, -0.235, -0.02, -0.01));
+    const hairMesh = part(G.hair, m.hair, 0, 0.64, -0.02);
     hairMesh.rotation.x = -0.35; // hairline sits back from the face
-    const nose = part(G.nose, this.mats.skin); // shows which way they face
-    nose.position.set(0, 0.6, 0.24);
-    torso.add(chest, hips, head, hairMesh, nose);
-    this.armL = limb(0.38, 0.3, G.arm, 0.52, shirtMat, true);
-    this.armR = limb(-0.38, 0.3, G.arm, 0.52, shirtMat, true);
+    this.hairMesh = hairMesh;
+    const nose = part(G.nose, m.skin, 0, 0.6, 0.24); // shows which way they face
+    torso.add(part(G.chest, m.shirt), part(G.hips, m.pants), part(G.neck, m.skin, 0, 0.42, 0), head, hairMesh, nose);
+    [this.armL, this.elbowL] = arm(0.325);
+    [this.armR, this.elbowR] = arm(-0.325);
     torso.add(this.armL, this.armR);
+
+    // --- Clothing ---
+    acc.placket = part(G.placket, m.inner, 0, 0.07, 0.155);
+    acc.placket.rotation.x = -0.08;
+    acc.placket.add(part(G.neckline, m.inner, 0, 0.26, -0.06));
+    acc.collar = part(G.collar, m.shirt, 0, 0.37, 0);
+    acc.chain = part(G.chain, S.gold, 0, 0.34, 0.03);
+    acc.badge = part(G.badge, S.gold, 0.14, 0.16, 0.175);
+    acc.radio = part(G.radio, S.black, -0.15, 0.24, 0.18);
+    for (const sx of [1, -1]) {
+      const e = part(G.epaulette, m.epaulette, sx * 0.22, 0.335, 0);
+      e.rotation.z = -sx * 0.4; // lie along the slope of the shoulder
+      acc.epaulettes.push(e);
+      torso.add(e);
+    }
+    acc.belt = part(G.belt, m.belt, 0, -0.17, 0);
+    acc.belt.add(part(G.buckle, S.gold, 0, 0, 0.185));
+    acc.holster = part(G.holster, S.black, -0.27, -0.26, 0.02);
+    acc.glasses = part(G.glasses, S.lens, 0, 0.67, 0.215);
+    acc.mask = part(G.mask, m.mask, 0, 0.62, 0);
+    torso.add(acc.placket, acc.collar, acc.chain, acc.badge, acc.radio, acc.belt, acc.holster, acc.glasses, acc.mask);
+
+    // --- Headwear (one shown at a time) ---
+    const hatGroup = (...parts) => {
+      const g = new THREE.Group();
+      g.position.y = 0.62; // head centre
+      g.add(...parts);
+      torso.add(g);
+      return g;
+    };
+    const peak = part(G.peak, S.black, 0, 0.17, 0.2);
+    peak.rotation.x = 0.12;
+    const bill = part(G.bill, m.hat, 0, 0.1, 0.22);
+    bill.rotation.x = 0.08;
+    const tailL = part(G.tail, m.hat, 0.05, -0.02, -0.25);
+    const tailR = part(G.tail, m.hat, -0.05, -0.04, -0.25);
+    tailL.rotation.set(0.35, 0, 0.25);
+    tailR.rotation.set(0.35, 0, -0.2);
+    const domeOf = (mt) => {
+      const d = part(G.dome, mt, 0, 0.03, -0.01);
+      d.rotation.x = -0.25;
+      return d;
+    };
+    acc.hats = {
+      police: hatGroup(
+        part(G.capBand, m.hatTrim, 0, 0.17, 0),
+        part(G.capCrown, m.hat, 0, 0.27, 0),
+        part(G.capBadge, S.gold, 0, 0.25, 0.3),
+        peak,
+      ),
+      cap: hatGroup(domeOf(m.hat), bill),
+      beanie: hatGroup(domeOf(m.hat), part(G.pompom, m.hat, 0, 0.29, -0.04)),
+      durag: hatGroup(domeOf(m.hat), tailL, tailR),
+      hood: hatGroup(part(G.hood, m.hat, 0, -0.02, -0.03)),
+    };
     return root;
   }
 }
