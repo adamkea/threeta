@@ -1,179 +1,64 @@
 import * as THREE from 'three';
 import { createRng } from '../core/random.js';
 import { toon } from '../render/toon.js';
-import { LANDMARK_BLOCKS, createLandmark } from './Landmarks.js';
+import { createLandmark } from './Landmarks.js';
+import { CITY, LAYOUT, LOT, WATER_Y, blockAt, groundHeight, offIsland, toWorld } from './CityLayout.js';
+import {
+  bounds, centroid, clipHalfPlane, insideConvex, isAxisRect, offsetConvex, offsetConvexPaired, signedArea,
+} from './geom.js';
 
-// City layout constants (metres). The city is a square grid of blocks separated by roads.
-export const CITY = {
-  blocks: 8, // blocks per side
-  blockSize: 40, // block footprint incl. sidewalk
-  roadWidth: 14,
-  sidewalk: 3,
-  curbHeight: 0.25,
-};
-CITY.cell = CITY.blockSize + CITY.roadWidth;
-CITY.size = CITY.blocks * CITY.blockSize + (CITY.blocks + 1) * CITY.roadWidth;
-CITY.half = CITY.size / 2;
-
-/** Height of the sea around the island; anything that goes over the edge falls to this. */
-export const WATER_Y = -0.6;
-
-/** True once a point is past the quayside, over open water. */
-export function offIsland(x, z) {
-  return Math.abs(x) > CITY.half || Math.abs(z) > CITY.half;
-}
-
-/** World-space centre of road line `i` (0..blocks), on either axis. */
-export function roadCenter(i) {
-  return -CITY.half + CITY.roadWidth / 2 + i * CITY.cell;
-}
-
-// Parking lot layout, in metres from a block's min corner. The lot sits at road level inside
-// the sidewalk ring. Two aisles run along X, with driveways through the sidewalk at both ends;
-// rows of bays face onto them: one row along each edge and a double row down the middle.
-export const LOT = {
-  bayWidth: 2.8,
-  bayDepth: 5.2,
-  bays: 12, // per row
-};
-LOT.x0 = CITY.sidewalk + (CITY.blockSize - 2 * CITY.sidewalk - LOT.bays * LOT.bayWidth) / 2;
-{
-  const s = CITY.sidewalk, d = LOT.bayDepth;
-  const aisle = (CITY.blockSize - 2 * s - 4 * d) / 2;
-  LOT.aisles = [
-    [s + d, s + d + aisle],
-    [s + 3 * d + aisle, s + 3 * d + 2 * aisle],
-  ];
-  // Each row: the z range of its bays and which way a car parked nose-in faces (+1 = +Z).
-  LOT.rows = [
-    { z0: s, z1: s + d, nose: -1 },
-    { z0: s + d + aisle, z1: s + 2 * d + aisle, nose: 1 },
-    { z0: s + 2 * d + aisle, z1: s + 3 * d + aisle, nose: -1 },
-    { z0: s + 3 * d + 2 * aisle, z1: s + 4 * d + 2 * aisle, nose: 1 },
-  ];
-}
-
-/** Blocks that are parking lots, as `bx * 100 + bz`. Filled in by createCity. */
-const lotBlocks = new Set();
-
-/** Block index (0..blocks-1) and offset into it along one axis, or null if on a road. */
-function blockAt(v) {
-  const o = v + CITY.half - CITY.roadWidth;
-  if (o < 0 || o > CITY.size - 2 * CITY.roadWidth) return null;
-  const local = o % CITY.cell;
-  return local < CITY.blockSize ? [Math.floor(o / CITY.cell), local] : null;
-}
-
-/** Ground height at a point: raised on sidewalks/blocks, 0 on roads (and in parking lots). */
-export function groundHeight(x, z) {
-  const bx = blockAt(x);
-  const bz = blockAt(z);
-  if (!bx || !bz) return 0;
-  if (lotBlocks.has(bx[0] * 100 + bz[0])) {
-    const s = CITY.sidewalk;
-    const [lx, lz] = [bx[1], bz[1]];
-    const insideX = lx > s && lx < CITY.blockSize - s;
-    const insideZ = lz > s && lz < CITY.blockSize - s;
-    if (insideX && insideZ) return 0;
-    if (insideZ && LOT.aisles.some(([a, b]) => lz > a && lz < b)) return 0; // driveway
-  }
-  return CITY.curbHeight;
-}
-
-/** World-space min corner of block `i` on either axis. */
-export function blockMin(i) {
-  return -CITY.half + CITY.roadWidth + i * CITY.cell;
-}
+// The city's meshes and colliders, built from the layout in CityLayout.js (road graph + blocks).
+export { CITY, LAYOUT, LOT, WATER_Y, blockAt, groundHeight, offIsland };
 
 // Comic-city palette: warm brick, sandstone, slate and a few loud accents.
 const BUILDING_COLORS = [
   0xc9744f, 0xb2473a, 0x7f9fb6, 0xe2c27d, 0x8fae7e, 0xb07aa0, 0xd9d1bf, 0x8c8079, 0x5f86a8, 0xe8a07c,
   0x6f6a73, 0xd8b45a,
 ];
+const WHITE = new THREE.Color(0xffffff);
 
 /**
- * Procedurally builds the city. Returns the scene group plus a list of axis-aligned
- * colliders ({minX, maxX, minZ, maxZ}) that vehicles can't pass through.
+ * Builds the city. Returns the scene group plus the static colliders vehicles and people can't
+ * pass through: axis-aligned boxes { minX, maxX, minZ, maxZ }, some with a convex `poly` (CCW,
+ * see geom.js) when the shape isn't axis-aligned — the box is then its bounds.
  */
 export function createCity(seed = 1337) {
   const rng = createRng(seed);
   const group = new THREE.Group();
   const colliders = [];
+  const { blocks } = LAYOUT;
 
   group.add(createGround());
   group.add(createRoadMarkings());
 
   const walls = new QuadBuilder();
   const roofs = new QuadBuilder();
-  const sidewalkMatrices = [];
-  const parks = [];
-  const lots = []; // parking lots: { x0, z0 } block corners
-  const lotRng = createRng(seed + 7);
-  lotBlocks.clear();
+  const slabs = new QuadBuilder(2);
+  const grass = new QuadBuilder(2);
   const buildings = []; // footprints + colours, for the map
-  const landmarks = []; // police station, hospital…
+  const landmarks = [];
+  const parks = [];
   const windowTex = createWindowTexture();
 
-  for (let bx = 0; bx < CITY.blocks; bx++) {
-    for (let bz = 0; bz < CITY.blocks; bz++) {
-      const x0 = blockMin(bx);
-      const z0 = blockMin(bz);
-
-      // Distance from centre drives building height: tall downtown, low outskirts.
-      const cx = (bx + 0.5) / CITY.blocks - 0.5;
-      const cz = (bz + 0.5) / CITY.blocks - 0.5;
-      const downtown = 1 - Math.min(1, Math.hypot(cx, cz) * 2);
-
-      const park = rng.chance(0.1);
-      // One lot is always right beside the player's starting point; others are scattered about.
-      const lot = !park && ((bx === 4 && bz === 4) || lotRng.chance(0.09));
-      const landmark = LANDMARK_BLOCKS.find((l) => l.bx === bx && l.bz === bz);
-      if (landmark) {
-        sidewalkMatrices.push(
-          new THREE.Matrix4().makeTranslation(x0 + CITY.blockSize / 2, CITY.curbHeight / 2, z0 + CITY.blockSize / 2),
-        );
-        const l = createLandmark(landmark.kind, x0 + CITY.blockSize / 2, z0 + CITY.blockSize / 2, CITY.curbHeight, {
-          colliders,
-          windowTex,
-        });
-        group.add(l.group);
-        landmarks.push(l);
-        buildings.push({ ...l.footprint, color: l.color });
-        // Build (and throw away) the block that would have stood here, so the rest of the city keeps its layout.
-        if (!park && !lot) buildBlock(rng, x0, z0, downtown, new QuadBuilder(), new QuadBuilder(), [], []);
-        continue;
-      }
-      if (lot) {
-        lots.push({ x0, z0 });
-        lotBlocks.add(bx * 100 + bz);
-        continue; // its sidewalk is a ring with driveways, built in createParkingLots
-      }
-      sidewalkMatrices.push(
-        new THREE.Matrix4().makeTranslation(x0 + CITY.blockSize / 2, CITY.curbHeight / 2, z0 + CITY.blockSize / 2),
-      );
-      if (park) {
-        parks.push({ x0, z0 });
-        continue;
-      }
-      buildBlock(rng, x0, z0, downtown, walls, roofs, colliders, buildings);
-    }
+  for (const b of blocks) {
+    if (b.use !== 'lot') extrudeSlab(slabs, b.shape, 0, CITY.curbHeight);
+    if (b.use === 'buildings') buildBlock(rng, b, walls, roofs, colliders, buildings);
+    else if (b.use === 'park') parks.push(b);
+  }
+  for (const l of LAYOUT.landmarks) {
+    const lm = createLandmark(l.kind, l.cx, l.cz, CITY.curbHeight, { colliders, windowTex, angle: l.angle });
+    group.add(lm.group);
+    landmarks.push(lm);
+    buildings.push({ ...lm.footprint, color: lm.color });
   }
 
-  // Sidewalk slabs (one instanced mesh for every block).
-  const sidewalkMat = toon({ map: createTileTexture() });
-  const sidewalkMesh = new THREE.InstancedMesh(
-    new THREE.BoxGeometry(CITY.blockSize, CITY.curbHeight, CITY.blockSize),
-    sidewalkMat,
-    sidewalkMatrices.length,
-  );
-  sidewalkMatrices.forEach((m, i) => sidewalkMesh.setMatrixAt(i, m));
-  sidewalkMesh.receiveShadow = true;
-  group.add(sidewalkMesh);
+  const sidewalkMat = toon({ map: createTileTexture(), vertexColors: true });
+  const parking = createParkingLots(createRng(seed + 7), slabs, colliders);
+  const slabMesh = new THREE.Mesh(slabs.build(), sidewalkMat);
+  slabMesh.receiveShadow = true;
+  group.add(slabMesh);
 
-  const wallMesh = new THREE.Mesh(
-    walls.build(),
-    toon({ map: windowTex, vertexColors: true }),
-  );
+  const wallMesh = new THREE.Mesh(walls.build(), toon({ map: windowTex, vertexColors: true }));
   wallMesh.castShadow = wallMesh.receiveShadow = true;
   group.add(wallMesh);
 
@@ -181,83 +66,366 @@ export function createCity(seed = 1337) {
   roofMesh.castShadow = roofMesh.receiveShadow = true;
   group.add(roofMesh);
 
-  group.add(createParks(rng, parks, colliders));
-  const parking = createParkingLots(lotRng, lots, sidewalkMat, colliders);
+  group.add(createParks(rng, parks, grass, colliders));
   group.add(parking.group);
   group.add(createStreetLamps(colliders));
 
-  return { group, colliders, buildings, parks, lots, landmarks, parkingSpots: parking.spots };
+  return {
+    group,
+    colliders,
+    buildings,
+    parks,
+    lots: LAYOUT.lots,
+    blocks,
+    landmarks,
+    parkingSpots: parking.spots,
+  };
 }
 
+/** A raised slab: top polygon plus its sides down to y0. */
+function extrudeSlab(qb, poly, y0, y1, color = WHITE) {
+  qb.polyTop(poly, y1, color);
+  for (let i = 0; i < poly.length; i++) {
+    const a = poly[i], b = poly[(i + 1) % poly.length];
+    qb.wall(b.x, b.z, a.x, a.z, y0, y1, color);
+  }
+}
+
+const rectPoly = (minX, minZ, maxX, maxZ) => [
+  { x: minX, z: minZ },
+  { x: maxX, z: minZ },
+  { x: maxX, z: maxZ },
+  { x: minX, z: maxZ },
+];
+
 /**
- * Parking lots: a sidewalk ring with driveways, painted bays, and a "P" sign. Returns the
- * meshes and every bay as a parking spot { x, z, heading } (heading faces nose-in or out).
+ * Parking lots: a paved rectangle in the block's own frame, with driveways along both aisles out
+ * to the streets either side, painted bays and a "P" sign. The rest of the block is sidewalk.
+ * Returns the meshes and every bay as a parking spot { x, z, heading } (nose-in or out).
  */
-function createParkingLots(rng, lots, sidewalkMat, colliders) {
+function createParkingLots(rng, slabs, colliders) {
   const g = new THREE.Group();
   const spots = [];
-  const lines = []; // [x, z, width, length] painted strips running along Z
-  const bs = CITY.blockSize, s = CITY.sidewalk, h = CITY.curbHeight;
-  const [[a0, a1], [b0, b1]] = LOT.aisles;
-  // Sidewalk ring in block-local rects [minX, minZ, maxX, maxZ], with gaps where the aisles exit.
-  const ring = [
-    [0, 0, bs, s],
-    [0, bs - s, bs, bs],
-  ];
-  for (const [xa, xb] of [[0, s], [bs - s, bs]]) {
-    ring.push([xa, s, xb, a0], [xa, a1, xb, b0], [xa, b1, xb, bs - s]);
-  }
+  const lines = []; // [x, z, width, length, ux, uz]: painted strips, length along (ux, uz)
+  const h = CITY.curbHeight;
 
-  for (const { x0, z0 } of lots) {
-    for (const [ax, az, bx, bz] of ring) {
-      const w = bx - ax, d = bz - az;
-      const geo = new THREE.BoxGeometry(w, h, d);
-      // Keep the paving tiles the same size as on the full-block slabs.
-      const uv = geo.attributes.uv;
-      for (let i = 0; i < uv.count; i++) uv.setXY(i, (uv.getX(i) * w) / bs, (uv.getY(i) * d) / bs);
-      const m = new THREE.Mesh(geo, sidewalkMat);
-      m.position.set(x0 + ax + w / 2, h / 2, z0 + az + d / 2);
-      m.receiveShadow = true;
-      g.add(m);
+  for (const lot of LAYOUT.lots) {
+    const block = LAYOUT.blocks[lot.block];
+    const { cx, cz, hw, hd, bays, bx0, rows, aisles } = lot;
+    const at = (lx, lz) => toWorld(lot, cx, cz, lx, lz);
+    const vx = -lot.uz, vz = lot.ux; // local +Z in world
+
+    // Sidewalk = block minus the paving and the two driveway bands. Cut it into convex pieces
+    // with half-planes in the lot's frame: n·(p - o) <= 0 keeps the side away from n.
+    const keep = (poly, lx, lz, nx, nz) => {
+      if (!poly) return null;
+      const o = at(lx, lz);
+      return clipHalfPlane(poly, o.x, o.z, nx * lot.ux + nz * vx, nx * lot.uz + nz * vz);
+    };
+    const pieces = [
+      keep(block.shape, 0, -hd, 0, 1), // north of the paving
+      keep(block.shape, 0, hd, 0, -1), // south of it
+    ];
+    const bands = [[-hd, aisles[0][0]], [aisles[0][1], aisles[1][0]], [aisles[1][1], hd]];
+    for (const [z0, z1] of bands) {
+      const band = keep(keep(block.shape, 0, z0, 0, -1), 0, z1, 0, 1);
+      pieces.push(keep(band, -hw, 0, 1, 0), keep(band, hw, 0, -1, 0)); // west and east of the paving
     }
+    for (const p of pieces) if (p && signedArea(p) > 0.5) extrudeSlab(slabs, p, 0, h);
 
-    for (const row of LOT.rows) {
+    for (const row of rows) {
       const depth = row.z1 - row.z0;
-      const zc = z0 + (row.z0 + row.z1) / 2;
-      for (let k = 0; k <= LOT.bays; k++) lines.push([x0 + LOT.x0 + k * LOT.bayWidth, zc, 0.15, depth]);
-      for (let k = 0; k < LOT.bays; k++) {
+      const zc = (row.z0 + row.z1) / 2;
+      for (let k = 0; k <= bays; k++) {
+        const p = at(bx0 + k * LOT.bayWidth, zc);
+        lines.push([p.x, p.z, 0.15, depth, vx, vz]);
+      }
+      for (let k = 0; k < bays; k++) {
         const nose = rng.chance(0.75) ? row.nose : -row.nose; // most drivers park nose-in
-        spots.push({
-          x: x0 + LOT.x0 + (k + 0.5) * LOT.bayWidth,
-          z: zc,
-          heading: nose > 0 ? 0 : Math.PI,
-        });
+        const p = at(bx0 + (k + 0.5) * LOT.bayWidth, zc);
+        spots.push({ x: p.x, z: p.z, heading: lot.angle + (nose > 0 ? 0 : Math.PI) });
       }
     }
     // Line down the back of the middle double row, and along the inside of each edge row.
-    const width = LOT.bays * LOT.bayWidth;
-    for (const z of [LOT.rows[0].z1 - 0.1, LOT.rows[1].z1, LOT.rows[3].z0 + 0.1]) {
-      lines.push([x0 + LOT.x0 + width / 2, z0 + z, width, 0.15]);
+    const width = bays * LOT.bayWidth;
+    for (const z of [rows[0].z1 - 0.1, rows[1].z1, rows[3].z0 + 0.1]) {
+      const p = at(bx0 + width / 2, z);
+      lines.push([p.x, p.z, 0.15, width, lot.ux, lot.uz]);
     }
 
-    // "P" sign on the sidewalk between the two west driveways.
-    const sx = x0 + s / 2, sz = z0 + (a1 + b0) / 2;
-    g.add(createParkingSign(sx, sz));
-    colliders.push({ minX: sx - 0.15, maxX: sx + 0.15, minZ: sz - 0.15, maxZ: sz + 0.15 });
+    // "P" sign on the sidewalk west of the paving, between the driveways (if there's room).
+    const sp = at(-hw - 1.5, (aisles[0][1] + aisles[1][0]) / 2);
+    if (insideConvex(block.shape, sp.x, sp.z, -0.5)) {
+      g.add(createParkingSign(sp.x, sp.z));
+      colliders.push({ minX: sp.x - 0.15, maxX: sp.x + 0.15, minZ: sp.z - 0.15, maxZ: sp.z + 0.15 });
+    }
   }
 
   if (lines.length) {
-    const mesh = new THREE.InstancedMesh(
-      new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2),
-      toon({ color: 0xeeeae0 }),
-      lines.length,
-    );
+    const mesh = new THREE.InstancedMesh(new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2), toon({ color: 0xeeeae0 }), lines.length);
     const m = new THREE.Matrix4();
-    lines.forEach(([x, z, w, l], i) => mesh.setMatrixAt(i, m.makeScale(w, 1, l).setPosition(x, 0.02, z)));
+    const q = new THREE.Quaternion();
+    const up = new THREE.Vector3(0, 1, 0);
+    lines.forEach(([x, z, w, l, ux, uz], i) => {
+      q.setFromAxisAngle(up, Math.atan2(ux, uz));
+      m.compose(new THREE.Vector3(x, 0.02, z), q, new THREE.Vector3(w, 1, l));
+      mesh.setMatrixAt(i, m);
+    });
     mesh.receiveShadow = true;
     g.add(mesh);
   }
   return { group: g, spots };
+}
+
+/**
+ * Splits a convex footprint into building plots: cut across the longest side (leaving a gap
+ * for an alley) until plots are small enough. Rectangles stay rectangles; triangles cut by the
+ * diagonal avenue get plots square to it.
+ */
+function splitPlots(rng, poly, downtown, depth = 0, out = []) {
+  const area = signedArea(poly);
+  let li = 0, L = 0;
+  for (let i = 0; i < poly.length; i++) {
+    const a = poly[i], b = poly[(i + 1) % poly.length];
+    const l = Math.hypot(b.x - a.x, b.z - a.z);
+    if (l > L) (L = l), (li = i);
+  }
+  const target = rng.range(140, 560) * (1 - downtown * 0.25);
+  if (depth >= 5 || area < 110 || (area < target && L < 36)) {
+    out.push(poly);
+    return out;
+  }
+  const a = poly[li], b = poly[(li + 1) % poly.length];
+  const ux = (b.x - a.x) / L, uz = (b.z - a.z) / L;
+  const t = rng.range(0.38, 0.62);
+  const px = a.x + (b.x - a.x) * t, pz = a.z + (b.z - a.z) * t;
+  const gap = 0.75;
+  const p1 = clipHalfPlane(poly, px - ux * gap, pz - uz * gap, ux, uz);
+  const p2 = clipHalfPlane(poly, px + ux * gap, pz + uz * gap, -ux, -uz);
+  for (const p of [p1, p2]) if (p) splitPlots(rng, p, downtown, depth + 1, out);
+  return out;
+}
+
+function buildBlock(rng, block, walls, roofs, colliders, buildings) {
+  const inner = offsetConvex(block.shape, CITY.sidewalk);
+  if (!inner) return;
+  const downtown = block.downtown;
+  for (const plot of splitPlots(rng, inner, downtown)) {
+    const area = signedArea(plot);
+    let perim = 0;
+    for (let i = 0; i < plot.length; i++) {
+      const p = plot[i], q = plot[(i + 1) % plot.length];
+      perim += Math.hypot(q.x - p.x, q.z - p.z);
+    }
+    if (area < 30 || (2 * area) / perim < 2.2) continue; // too small or thin to build on
+    const base = 6 + downtown * 16;
+    const h = rng.range(base * 0.6, base * 1.4) + (rng.chance(0.08 + downtown * 0.2) ? rng.range(8, 18) : 0);
+    const color = new THREE.Color(rng.pick(BUILDING_COLORS)).offsetHSL(0, 0, rng.range(-0.05, 0.05));
+    addBuilding(rng, plot, CITY.curbHeight, h, color, walls, roofs);
+    const bb = bounds(plot);
+    const rect = isAxisRect(plot);
+    colliders.push(rect ? { ...bb } : { ...bb, poly: plot });
+    buildings.push({ ...bb, poly: rect ? null : plot, height: h, color: color.getHex() });
+  }
+}
+
+/** Walls, a flat roof inside a parapet lip, and maybe a rooftop box, for one footprint. */
+function addBuilding(rng, poly, y0, h, color, walls, roofs) {
+  const top = y0 + h;
+  const n = poly.length;
+  for (let i = 0; i < n; i++) {
+    const a = poly[i], b = poly[(i + 1) % n];
+    walls.wall(b.x, b.z, a.x, a.z, y0, top, color);
+  }
+  // Flat grey roof inside a parapet lip — gives the ink pass a crisp rooftop outline.
+  const roofCol = new THREE.Color(0x7d7a78).lerp(color, 0.25);
+  const lip = color.clone().multiplyScalar(0.85);
+  const lipTop = lip.clone().multiplyScalar(1.1);
+  const ph = 0.7;
+  const inner = offsetConvexPaired(poly, 0.5);
+  if (inner) {
+    roofs.polyTop(inner, top, roofCol);
+    for (let i = 0; i < n; i++) {
+      const a = poly[i], b = poly[(i + 1) % n], ia = inner[i], ib = inner[(i + 1) % n];
+      roofs.wall(b.x, b.z, a.x, a.z, top, top + ph, lip);
+      roofs.wall(ia.x, ia.z, ib.x, ib.z, top, top + ph, lip);
+      roofs.polyTop([a, b, ib, ia], top + ph, lipTop);
+    }
+  } else {
+    roofs.polyTop(poly, top, roofCol);
+  }
+
+  // Rooftop detail: an AC unit / stairwell box, if one fits.
+  if (rng.chance(0.7)) {
+    const c = centroid(poly);
+    const s = rng.range(2, 5);
+    const px = c.x + rng.range(-2, 2) - s / 2, pz = c.z + rng.range(-2, 2) - s / 2;
+    const box = rectPoly(px, pz, px + s, pz + s);
+    if (box.every((p) => insideConvex(poly, p.x, p.z, -1))) {
+      const unitTop = top + rng.range(1, 3);
+      const dc = new THREE.Color(rng.pick([0xb8bcc2, 0x9aa3ad, 0xc9b79a]));
+      for (let i = 0; i < 4; i++) {
+        const a = box[i], b = box[(i + 1) % 4];
+        roofs.wall(b.x, b.z, a.x, a.z, top, unitTop, dc);
+      }
+      roofs.polyTop(box, unitTop, dc.clone().multiplyScalar(1.1));
+    }
+  }
+}
+
+function createGround() {
+  const g = new THREE.Group();
+  const asphalt = new THREE.Mesh(new THREE.PlaneGeometry(CITY.size, CITY.size), toon({ map: createAsphaltTexture() }));
+  asphalt.rotation.x = -Math.PI / 2;
+  asphalt.receiveShadow = true;
+  g.add(asphalt);
+
+  // Water surrounding the island city.
+  const water = new THREE.Mesh(new THREE.PlaneGeometry(CITY.size * 6, CITY.size * 6), toon({ color: 0x2f8fb8 }));
+  water.rotation.x = -Math.PI / 2;
+  water.position.y = WATER_Y;
+  g.add(water);
+
+  // Open quayside: the island is a slab standing in the sea, with no wall to stop you going over.
+  const quay = new THREE.Mesh(new THREE.BoxGeometry(CITY.size, 4, CITY.size), toon({ color: 0x9a9384 }));
+  quay.position.y = -2.01; // top sits just under the asphalt
+  g.add(quay);
+  return g;
+}
+
+/**
+ * Paint for every road: double yellow centre line and white edge lines between the junctions,
+ * zebra crossings and stop lines at signalled junctions. Each strip is [x, z, width, length, ux, uz]
+ * with its length running along (ux, uz).
+ */
+function createRoadMarkings() {
+  const g = LAYOUT.graph;
+  const yellow = [], white = [], crossings = [], stops = [];
+
+  for (const e of g.edges) {
+    const A = g.nodes[e.a], B = g.nodes[e.b];
+    const dx = e.dx, dz = e.dz;
+    const rx = -dz, rz = dx; // right of travel a -> b
+    const sa = g.setback[e.id * 2], sb = g.setback[e.id * 2 + 1];
+    const at = (along, lateral) => [A.x + dx * along + rx * lateral, A.z + dz * along + rz * lateral];
+    const a0 = A.signal ? sa + 3.8 : sa;
+    const a1 = e.len - (B.signal ? sb + 3.8 : sb);
+    if (a1 > a0) {
+      const mid = (a0 + a1) / 2, len = a1 - a0;
+      for (const k of [-0.22, 0.22]) yellow.push([...at(mid, k), 0.22, len, dx, dz]);
+      for (const k of [-(e.hw - 0.7), e.hw - 0.7]) white.push([...at(mid, k), 0.25, len, dx, dz]);
+    }
+    for (const [node, along, sgn] of [[A, sa, 1], [B, e.len - sb, -1]]) {
+      if (!node.signal) continue;
+      // Zebra crossing just outside the junction.
+      for (let k = -e.hw + 1; k <= e.hw - 1; k += 1.5) crossings.push([...at(along + 1.5 * sgn, k), 0.9, 2.5, dx, dz]);
+      // Stop line across the lane arriving at this junction (traffic drives on the right).
+      const lateral = (-sgn * e.hw) / 2;
+      stops.push([...at(along + 3.4 * sgn, lateral), 0.6, e.hw - 0.4, rx, rz]);
+    }
+  }
+
+  const group = new THREE.Group();
+  const place = (list, color, y) => {
+    const mesh = new THREE.InstancedMesh(new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2), toon({ color }), list.length);
+    const m = new THREE.Matrix4();
+    const q = new THREE.Quaternion();
+    const up = new THREE.Vector3(0, 1, 0);
+    const p = new THREE.Vector3();
+    const s = new THREE.Vector3();
+    list.forEach(([x, z, w, len, ux, uz], i) => {
+      q.setFromAxisAngle(up, Math.atan2(ux, uz));
+      m.compose(p.set(x, y, z), q, s.set(w, 1, len));
+      mesh.setMatrixAt(i, m);
+    });
+    mesh.receiveShadow = true;
+    group.add(mesh);
+  };
+  place(yellow, 0xf2c230, 0.02);
+  place(white, 0xeeeae0, 0.02);
+  place(crossings, 0xeeeae0, 0.021);
+  place(stops, 0xeeeae0, 0.022);
+  return group;
+}
+
+function createParks(rng, parks, grass, colliders) {
+  const g = new THREE.Group();
+  const trees = [];
+  for (const b of parks) {
+    const inner = offsetConvex(b.shape, CITY.sidewalk);
+    if (!inner) continue;
+    extrudeSlab(grass, inner, CITY.curbHeight, CITY.curbHeight + 0.1);
+    const zone = offsetConvex(inner, 3);
+    if (!zone) continue;
+    const bb = bounds(zone);
+    const count = Math.max(3, Math.min(40, Math.round(signedArea(zone) / 110)));
+    for (let i = 0, tries = 0; i < count && tries < count * 20; tries++) {
+      const x = rng.range(bb.minX, bb.maxX), z = rng.range(bb.minZ, bb.maxZ);
+      if (!insideConvex(zone, x, z)) continue;
+      if (trees.some((t) => Math.hypot(t.x - x, t.z - z) < 4.5)) continue;
+      const s = rng.range(0.8, 1.3);
+      trees.push({ x, z, s });
+      colliders.push({ minX: x - 0.4, maxX: x + 0.4, minZ: z - 0.4, maxZ: z + 0.4 });
+      i++;
+    }
+  }
+  const grassMesh = new THREE.Mesh(grass.build(), toon({ color: 0x5fae3f, vertexColors: true }));
+  grassMesh.receiveShadow = true;
+  g.add(grassMesh);
+
+  const trunk = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.25, 0.35, 2.5, 8), toon({ color: 0x7a5232 }), trees.length);
+  const leaves = new THREE.InstancedMesh(
+    new THREE.SphereGeometry(2.3, 12, 8).scale(1, 0.8, 1), // round, cartoon canopy
+    toon({ color: 0x3f9a3a }),
+    trees.length,
+  );
+  const m = new THREE.Matrix4();
+  trees.forEach(({ x, z, s }, i) => {
+    m.makeScale(s, s, s).setPosition(x, CITY.curbHeight + 1.25 * s, z);
+    trunk.setMatrixAt(i, m);
+    m.makeScale(s, s, s).setPosition(x, CITY.curbHeight + 3.6 * s, z);
+    leaves.setMatrixAt(i, m);
+  });
+  trunk.castShadow = leaves.castShadow = true;
+  g.add(trunk, leaves);
+  return g;
+}
+
+/**
+ * Street lamps: one on every traffic-signal pole (the signals hang off them, see
+ * TrafficLights.js), plus one at each other block corner.
+ */
+function createStreetLamps(colliders) {
+  const spots = [];
+  const near = (x, z, r) => spots.some(([sx, sz]) => Math.hypot(sx - x, sz - z) < r);
+  for (const h of LAYOUT.signalHeads) if (!near(h.x, h.z, 0.5)) spots.push([h.x, h.z]);
+  for (const b of LAYOUT.blocks) {
+    if (b.use === 'lot') continue;
+    for (const c of b.corners) {
+      if (c.straight) continue;
+      const x = c.x + c.vx * 1.2, z = c.z + c.vz * 1.2;
+      if (!insideConvex(b.shape, x, z, -0.4) || near(x, z, 3)) continue;
+      spots.push([x, z]);
+    }
+  }
+  const pole = new THREE.InstancedMesh(
+    new THREE.CylinderGeometry(0.14, 0.18, 6, 8),
+    toon({ color: 0x2f5a3e }), // classic dark-green city lamp posts
+    spots.length,
+  );
+  const head = new THREE.InstancedMesh(new THREE.BoxGeometry(0.8, 0.35, 0.8), new THREE.MeshBasicMaterial({ color: 0xfff1b8 }), spots.length);
+  const m = new THREE.Matrix4();
+  spots.forEach(([x, z], i) => {
+    m.makeTranslation(x, CITY.curbHeight + 3, z);
+    pole.setMatrixAt(i, m);
+    m.makeTranslation(x, CITY.curbHeight + 6.1, z);
+    head.setMatrixAt(i, m);
+    colliders.push({ minX: x - 0.2, maxX: x + 0.2, minZ: z - 0.2, maxZ: z + 0.2 });
+  });
+  pole.castShadow = true;
+  const g = new THREE.Group();
+  g.add(pole, head);
+  return g;
 }
 
 let signParts = null;
@@ -289,229 +457,6 @@ function createParkingSign(x, z) {
   pole.castShadow = board.castShadow = true;
   sign.add(pole, board);
   return sign;
-}
-
-function buildBlock(rng, x0, z0, downtown, walls, roofs, colliders, buildings) {
-  const inset = CITY.sidewalk;
-  const lot = CITY.blockSize - inset * 2;
-  const cols = rng.int(1, 3);
-  const rows = rng.int(1, 3);
-  const gap = 1.5;
-  const cw = (lot - gap * (cols - 1)) / cols;
-  const rw = (lot - gap * (rows - 1)) / rows;
-
-  for (let c = 0; c < cols; c++) {
-    for (let r = 0; r < rows; r++) {
-      const minX = x0 + inset + c * (cw + gap);
-      const minZ = z0 + inset + r * (rw + gap);
-      const base = 6 + downtown * 16;
-      const h = rng.range(base * 0.6, base * 1.4) + (rng.chance(0.08 + downtown * 0.2) ? rng.range(8, 18) : 0);
-      const color = new THREE.Color(rng.pick(BUILDING_COLORS)).offsetHSL(0, 0, rng.range(-0.05, 0.05));
-      const y0 = CITY.curbHeight;
-
-      walls.boxSides(minX, minZ, minX + cw, minZ + rw, y0, y0 + h, color);
-      // Flat grey roof inside a parapet lip — gives the ink pass a crisp rooftop outline.
-      const top = y0 + h;
-      const roofCol = new THREE.Color(0x7d7a78).lerp(color, 0.25);
-      const lip = color.clone().multiplyScalar(0.85);
-      const p = 0.5, ph = 0.7;
-      roofs.top(minX, minZ, minX + cw, minZ + rw, top, roofCol);
-      for (const [ax, az, bx, bz] of [
-        [minX, minZ, minX + cw, minZ + p],
-        [minX, minZ + rw - p, minX + cw, minZ + rw],
-        [minX, minZ + p, minX + p, minZ + rw - p],
-        [minX + cw - p, minZ + p, minX + cw, minZ + rw - p],
-      ]) {
-        roofs.boxSides(ax, az, bx, bz, top, top + ph, lip);
-        roofs.top(ax, az, bx, bz, top + ph, lip.clone().multiplyScalar(1.1));
-      }
-
-      // Rooftop detail: an AC unit / stairwell box.
-      if (rng.chance(0.7)) {
-        const s = rng.range(2, Math.min(cw, rw) * 0.4);
-        const px = rng.range(minX + 1, minX + cw - s - 1);
-        const pz = rng.range(minZ + 1, minZ + rw - s - 1);
-        const unitTop = top + rng.range(1, 3);
-        const dc = new THREE.Color(rng.pick([0xb8bcc2, 0x9aa3ad, 0xc9b79a]));
-        roofs.boxSides(px, pz, px + s, pz + s, top, unitTop, dc);
-        roofs.top(px, pz, px + s, pz + s, unitTop, dc.clone().multiplyScalar(1.1));
-      }
-
-      colliders.push({ minX, maxX: minX + cw, minZ, maxZ: minZ + rw });
-      buildings.push({ minX, maxX: minX + cw, minZ, maxZ: minZ + rw, height: h, color: color.getHex() });
-    }
-  }
-}
-
-function createGround() {
-  const g = new THREE.Group();
-  const asphalt = new THREE.Mesh(
-    new THREE.PlaneGeometry(CITY.size, CITY.size),
-    toon({ map: createAsphaltTexture() }),
-  );
-  asphalt.rotation.x = -Math.PI / 2;
-  asphalt.receiveShadow = true;
-  g.add(asphalt);
-
-  // Water surrounding the island city.
-  const water = new THREE.Mesh(
-    new THREE.PlaneGeometry(CITY.size * 6, CITY.size * 6),
-    toon({ color: 0x2f8fb8 }),
-  );
-  water.rotation.x = -Math.PI / 2;
-  water.position.y = WATER_Y;
-  g.add(water);
-
-  // Open quayside: the island is a slab standing in the sea, with no wall to stop you going over.
-  const quay = new THREE.Mesh(new THREE.BoxGeometry(CITY.size, 4, CITY.size), toon({ color: 0x9a9384 }));
-  quay.position.y = -2.01; // top sits just under the asphalt
-  g.add(quay);
-  return g;
-}
-
-function createRoadMarkings() {
-  const half = CITY.roadWidth / 2;
-  const yellow = []; // [x, z, length, alongX]
-  const white = [];
-  const crossings = [];
-  const stops = [];
-
-  for (let line = 0; line <= CITY.blocks; line++) {
-    const c = roadCenter(line);
-    for (let seg = 0; seg < CITY.blocks; seg++) {
-      const s0 = blockMin(seg);
-      const s1 = s0 + CITY.blockSize;
-      const a = s0 + 3.8, b = s1 - 3.8; // between the stop lines
-      const mid = (a + b) / 2, len = b - a;
-      // Double yellow centre line.
-      for (const k of [-0.22, 0.22]) {
-        yellow.push([c + k, mid, len, false], [mid, c + k, len, true]);
-      }
-      // Solid white edge lines just inside the curbs.
-      for (const k of [-(half - 0.7), half - 0.7]) {
-        white.push([c + k, mid, len, false], [mid, c + k, len, true]);
-      }
-      // Zebra crossings at both ends of the segment.
-      for (const edge of [s0 + 1.5, s1 - 1.5]) {
-        for (let k = -half + 1; k <= half - 1; k += 1.5) {
-          crossings.push([c + k, edge, 2.5, false], [edge, c + k, 2.5, true]);
-        }
-      }
-      // Stop lines across the approaching lanes (traffic drives on the right).
-      const sl = half / 2;
-      stops.push(
-        [c - sl, s1 - 3.4, 0, false], // +Z traffic, lane at -X
-        [c + sl, s0 + 3.4, 0, false], // -Z traffic, lane at +X
-        [s1 - 3.4, c + sl, 0, true], // +X traffic, lane at +Z
-        [s0 + 3.4, c - sl, 0, true], // -X traffic, lane at -Z
-      );
-    }
-  }
-
-  const g = new THREE.Group();
-  const place = (list, w, color, y) => {
-    const mesh = new THREE.InstancedMesh(new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2), toon({ color }), list.length);
-    const m = new THREE.Matrix4();
-    const rot = new THREE.Matrix4().makeRotationY(Math.PI / 2);
-    const scl = new THREE.Matrix4();
-    list.forEach(([x, z, len, alongX], i) => {
-      m.makeTranslation(x, y, z);
-      if (alongX) m.multiply(rot);
-      m.multiply(scl.makeScale(w, 1, len));
-      mesh.setMatrixAt(i, m);
-    });
-    mesh.receiveShadow = true;
-    g.add(mesh);
-  };
-  place(yellow, 0.22, 0xf2c230, 0.02);
-  place(white, 0.25, 0xeeeae0, 0.02);
-  place(crossings, 0.9, 0xeeeae0, 0.021);
-  // Stop lines: thick bars spanning half the road. Encode as rotated wide strips.
-  place(
-    stops.map(([x, z, , alongX]) => [x, z, half - 0.4, !alongX]),
-    0.6,
-    0xeeeae0,
-    0.022,
-  );
-  return g;
-}
-
-function createParks(rng, parks, colliders) {
-  const g = new THREE.Group();
-  const grassMat = toon({ color: 0x5fae3f });
-  const trees = [];
-  for (const { x0, z0 } of parks) {
-    const inner = CITY.blockSize - CITY.sidewalk * 2;
-    const grass = new THREE.Mesh(new THREE.BoxGeometry(inner, 0.1, inner), grassMat);
-    grass.position.set(x0 + CITY.blockSize / 2, CITY.curbHeight + 0.05, z0 + CITY.blockSize / 2);
-    grass.receiveShadow = true;
-    g.add(grass);
-    const count = rng.int(6, 12);
-    for (let i = 0; i < count; i++) {
-      const x = x0 + CITY.sidewalk + rng.range(3, inner - 3);
-      const z = z0 + CITY.sidewalk + rng.range(3, inner - 3);
-      const s = rng.range(0.8, 1.3);
-      trees.push({ x, z, s });
-      colliders.push({ minX: x - 0.4, maxX: x + 0.4, minZ: z - 0.4, maxZ: z + 0.4 });
-    }
-  }
-
-  const trunk = new THREE.InstancedMesh(
-    new THREE.CylinderGeometry(0.25, 0.35, 2.5, 8),
-    toon({ color: 0x7a5232 }),
-    trees.length,
-  );
-  const leaves = new THREE.InstancedMesh(
-    new THREE.SphereGeometry(2.3, 12, 8).scale(1, 0.8, 1), // round, cartoon canopy
-    toon({ color: 0x3f9a3a }),
-    trees.length,
-  );
-  const m = new THREE.Matrix4();
-  trees.forEach(({ x, z, s }, i) => {
-    m.makeScale(s, s, s).setPosition(x, CITY.curbHeight + 1.25 * s, z);
-    trunk.setMatrixAt(i, m);
-    m.makeScale(s, s, s).setPosition(x, CITY.curbHeight + 3.6 * s, z);
-    leaves.setMatrixAt(i, m);
-  });
-  trunk.castShadow = leaves.castShadow = true;
-  g.add(trunk, leaves);
-  return g;
-}
-
-function createStreetLamps(colliders) {
-  const spots = [];
-  const o = 1.2; // offset in from the curb corner
-  for (let bx = 0; bx < CITY.blocks; bx++) {
-    for (let bz = 0; bz < CITY.blocks; bz++) {
-      const x0 = blockMin(bx);
-      const z0 = blockMin(bz);
-      const x1 = x0 + CITY.blockSize;
-      const z1 = z0 + CITY.blockSize;
-      spots.push([x0 + o, z0 + o], [x1 - o, z0 + o], [x0 + o, z1 - o], [x1 - o, z1 - o]);
-    }
-  }
-  const pole = new THREE.InstancedMesh(
-    new THREE.CylinderGeometry(0.14, 0.18, 6, 8),
-    toon({ color: 0x2f5a3e }), // classic dark-green city lamp posts
-    spots.length,
-  );
-  const head = new THREE.InstancedMesh(
-    new THREE.BoxGeometry(0.8, 0.35, 0.8),
-    new THREE.MeshBasicMaterial({ color: 0xfff1b8 }),
-    spots.length,
-  );
-  const m = new THREE.Matrix4();
-  spots.forEach(([x, z], i) => {
-    m.makeTranslation(x, CITY.curbHeight + 3, z);
-    pole.setMatrixAt(i, m);
-    m.makeTranslation(x, CITY.curbHeight + 6.1, z);
-    head.setMatrixAt(i, m);
-    colliders.push({ minX: x - 0.2, maxX: x + 0.2, minZ: z - 0.2, maxZ: z + 0.2 });
-  });
-  pole.castShadow = true;
-  const g = new THREE.Group();
-  g.add(pole, head);
-  return g;
 }
 
 function canvasTexture(size, draw, repeat = 1) {
@@ -580,7 +525,7 @@ function createTileTexture() {
       ctx.fillRect(0, 0, 64, 2);
       ctx.fillRect(0, 0, 2, 64);
     },
-    CITY.blockSize / 2,
+    1,
   );
 }
 
@@ -608,6 +553,7 @@ function createAsphaltTexture() {
 }
 
 /** Accumulates coloured, UV-mapped quads into a single merged BufferGeometry. */
+/** Accumulates coloured, UV-mapped faces into a single merged BufferGeometry. */
 class QuadBuilder {
   constructor(tile = 3) {
     this.tile = tile;
@@ -618,31 +564,32 @@ class QuadBuilder {
     this.idx = [];
   }
 
-  quad(a, b, c, d, n, uw, uh, color) {
+  /** Convex polygon fan; `pts` are [x, y, z], `uvs` are [u, v], wound front-facing. */
+  face(pts, n, uvs, color) {
     const base = this.pos.length / 3;
-    for (const p of [a, b, c, d]) this.pos.push(...p);
-    for (let i = 0; i < 4; i++) {
+    pts.forEach((p, i) => {
+      this.pos.push(...p);
       this.nrm.push(...n);
+      this.uv.push(...uvs[i]);
       this.col.push(color.r, color.g, color.b);
-    }
-    this.uv.push(0, 0, uw, 0, uw, uh, 0, uh);
-    this.idx.push(base, base + 1, base + 2, base, base + 2, base + 3);
+    });
+    for (let i = 1; i + 1 < pts.length; i++) this.idx.push(base, base + i, base + i + 1);
   }
 
-  boxSides(x0, z0, x1, z1, y0, y1, color) {
-    const t = this.tile;
-    const h = (y1 - y0) / t;
-    const w = (x1 - x0) / t;
-    const d = (z1 - z0) / t;
-    this.quad([x0, y0, z1], [x1, y0, z1], [x1, y1, z1], [x0, y1, z1], [0, 0, 1], w, h, color); // +Z
-    this.quad([x1, y0, z0], [x0, y0, z0], [x0, y1, z0], [x1, y1, z0], [0, 0, -1], w, h, color); // -Z
-    this.quad([x1, y0, z1], [x1, y0, z0], [x1, y1, z0], [x1, y1, z1], [1, 0, 0], d, h, color); // +X
-    this.quad([x0, y0, z0], [x0, y0, z1], [x0, y1, z1], [x0, y1, z0], [-1, 0, 0], d, h, color); // -X
+  /** Vertical wall from (ax, az) to (bx, bz), facing (-(bz - az), bx - ax): to the left going a -> b. */
+  wall(ax, az, bx, bz, y0, y1, color) {
+    const len = Math.hypot(bx - ax, bz - az);
+    if (len < 1e-6) return;
+    const n = [-(bz - az) / len, 0, (bx - ax) / len];
+    const w = len / this.tile, h = (y1 - y0) / this.tile;
+    this.face([[ax, y0, az], [bx, y0, bz], [bx, y1, bz], [ax, y1, az]], n, [[0, 0], [w, 0], [w, h], [0, h]], color);
   }
 
-  top(x0, z0, x1, z1, y, color) {
+  /** Flat, upward-facing convex polygon (CCW in x/z, see geom.js) at height y, UVs in world space. */
+  polyTop(poly, y, color) {
     const t = this.tile;
-    this.quad([x0, y, z1], [x1, y, z1], [x1, y, z0], [x0, y, z0], [0, 1, 0], (x1 - x0) / t, (z1 - z0) / t, color);
+    const pts = poly.slice().reverse();
+    this.face(pts.map((p) => [p.x, y, p.z]), [0, 1, 0], pts.map((p) => [p.x / t, -p.z / t]), color);
   }
 
   build() {

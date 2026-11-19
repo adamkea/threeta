@@ -9,28 +9,28 @@ import { toon } from '../render/toon.js';
 //
 // All coordinates below are block-local: (0, 0) is the block centre, y = 0 is the sidewalk.
 
-/** Which blocks hold which landmark (block indices, 0..CITY.blocks-1). */
-export const LANDMARK_BLOCKS = [
-  { kind: 'police', bx: 2, bz: 4 },
-  { kind: 'hospital', bx: 5, bz: 2 },
-];
+// Which blocks hold them is decided in CityLayout.js (assignUses).
 
 /**
  * Builds one landmark centred on (cx, cz) with its ground floor at height y0.
  * Adds its solid parts to `colliders` and returns { kind, name, group, respawn, footprint, color }.
  * `respawn` is where the player reappears: { x, z, heading }, outside the front door.
  */
-export function createLandmark(kind, cx, cz, y0, { colliders, windowTex }) {
-  const b = new Builder(cx, cz, colliders, windowTex);
+export function createLandmark(kind, cx, cz, y0, { colliders, windowTex, angle = 0 }) {
+  const b = new Builder(cx, cz, angle, colliders, windowTex);
   const spec = kind === 'police' ? policeStation(b) : hospital(b);
   b.group.position.set(cx, y0, cz);
+  b.group.rotation.y = angle;
   const [minX, minZ, maxX, maxZ] = spec.footprint;
+  const poly = b.toWorldRect(minX, minZ, maxX, maxZ);
+  const xs = poly.map((p) => p.x), zs = poly.map((p) => p.z);
+  const door = b.toWorld(spec.respawn[0], spec.respawn[1]);
   return {
     kind,
     name: spec.name,
     group: b.group,
-    respawn: { x: cx + spec.respawn[0], z: cz + spec.respawn[1], heading: 0 },
-    footprint: { minX: cx + minX, maxX: cx + maxX, minZ: cz + minZ, maxZ: cz + maxZ, height: spec.height },
+    respawn: { x: door.x, z: door.z, heading: angle },
+    footprint: { minX: Math.min(...xs), maxX: Math.max(...xs), minZ: Math.min(...zs), maxZ: Math.max(...zs), poly, height: spec.height },
     color: spec.color,
   };
 }
@@ -95,10 +95,13 @@ function hospital(b) {
 
 /** Accumulates a landmark's meshes in a group, and its solid parts as world-space colliders. */
 class Builder {
-  constructor(cx, cz, colliders, windowTex) {
+  constructor(cx, cz, angle, colliders, windowTex) {
     this.group = new THREE.Group();
     this.cx = cx;
     this.cz = cz;
+    // The group is turned by `angle` about Y: block-local (x, z) maps to world as below.
+    this.cos = Math.cos(angle);
+    this.sin = Math.sin(angle);
     this.colliders = colliders;
     this.windowTex = windowTex;
     this.mats = new Map();
@@ -116,9 +119,22 @@ class Builder {
     return mesh;
   }
 
+  /** Block-local point -> world. */
+  toWorld(x, z) {
+    return { x: this.cx + x * this.cos + z * this.sin, z: this.cz - x * this.sin + z * this.cos };
+  }
+
+  /** Block-local rectangle -> world polygon (CCW, see geom.js). */
+  toWorldRect(minX, minZ, maxX, maxZ) {
+    return [this.toWorld(minX, minZ), this.toWorld(maxX, minZ), this.toWorld(maxX, maxZ), this.toWorld(minX, maxZ)];
+  }
+
   solid(minX, minZ, maxX, maxZ) {
-    const { cx, cz } = this;
-    this.colliders.push({ minX: cx + minX, maxX: cx + maxX, minZ: cz + minZ, maxZ: cz + maxZ });
+    const poly = this.toWorldRect(minX, minZ, maxX, maxZ);
+    const xs = poly.map((p) => p.x), zs = poly.map((p) => p.z);
+    const box = { minX: Math.min(...xs), maxX: Math.max(...xs), minZ: Math.min(...zs), maxZ: Math.max(...zs) };
+    // Turned at all? Then it's a polygon collider; the box is just its bounds.
+    this.colliders.push(Math.abs(this.sin) > 1e-3 ? { ...box, poly } : box);
   }
 
   box(minX, minZ, maxX, maxZ, y0, y1, color, { solid = false, material } = {}) {

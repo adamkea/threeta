@@ -1,12 +1,14 @@
 import * as THREE from 'three';
 import { Input } from './core/Input.js';
 import { CameraRig } from './core/CameraRig.js';
-import { createCity, roadCenter, groundHeight, CITY, offIsland } from './world/City.js';
+import { createCity, groundHeight, offIsland, LAYOUT } from './world/City.js';
 import { Car } from './vehicles/Car.js';
 import { MODELS, randomModel } from './vehicles/carModels.js';
 import { ColliderGrid } from './world/ColliderGrid.js';
+import { overlaps } from './world/colliders.js';
 import { TrafficLights } from './traffic/TrafficLights.js';
 import { TrafficSystem } from './traffic/TrafficSystem.js';
+import { lanePoint } from './traffic/RoadNetwork.js';
 import { resolveCarCollisions } from './physics/carCollisions.js';
 import { resolvePedCarCollisions, resolvePedPedCollisions } from './physics/pedCollisions.js';
 import { Pedestrian } from './characters/Pedestrian.js';
@@ -61,9 +63,9 @@ const city = createCity();
 scene.add(city.group);
 const world = new ColliderGrid(city.colliders);
 
-const SPAWN = { x: roadCenter(Math.floor(CITY.blocks / 2)) + 3.5, z: roadCenter(CITY.blocks / 2) + 20 };
+const SPAWN = LAYOUT.spawn; // in a lane beside the car park nearest the middle of town
 const playerCar = new Car({ model: 'hatch', color: 0xa8aeb6 }); // silver hatchback
-playerCar.reset(SPAWN.x, SPAWN.z, Math.PI);
+playerCar.reset(SPAWN.x, SPAWN.z, SPAWN.heading);
 scene.add(playerCar.mesh);
 
 // --- Traffic & people ---
@@ -253,7 +255,7 @@ function resetPlayer() {
     const c = player.vehicle;
     c.reset(c.position.x, c.position.y, c.heading); // stop and un-spin in place
   } else {
-    player.ped.reset(SPAWN.x - 9, SPAWN.z);
+    player.ped.reset(SPAWN.footX, SPAWN.footZ);
   }
 }
 
@@ -417,7 +419,7 @@ function spawnSpot() {
       const x = from.position.x + (fwd.x * f + right.x * r) * ahead;
       const z = from.position.y + (fwd.y * f + right.y * r) * ahead;
       if (offIsland(x, z)) continue;
-      if (world.query(x, z).some((b) => x > b.minX - R && x < b.maxX + R && z > b.minZ - R && z < b.maxZ + R)) continue;
+      if (world.query(x, z).some((b) => overlaps(b, x, z, R))) continue;
       if (allCars().some((c) => c.active && Math.hypot(c.position.x - x, c.position.y - z) < 5)) continue;
       return { x, z, heading: h };
     }
@@ -441,6 +443,40 @@ devConsole.register('spawn', 'spawn <model | random> — park a car next to you 
   return `Spawned a ${model}.`;
 });
 
+// Teleport: to coordinates, or to a named place. Cars land in the nearest lane.
+const PLACES = {
+  spawn: () => SPAWN,
+  police: () => landmark('police').respawn,
+  hospital: () => landmark('hospital').respawn,
+  diagonal: () => {
+    const g = LAYOUT.graph;
+    const e = g.edges.filter((x) => x.width === 16)[2]; // the diagonal avenues are 16 m wide
+    const A = g.nodes[e.a];
+    return { x: A.x + e.dx * e.len * 0.5, z: A.z + e.dz * e.len * 0.5 };
+  },
+  park: () => {
+    const b = city.parks.reduce((a, p) => (p.area > a.area ? p : a));
+    return b.center;
+  },
+};
+devConsole.register('tp', `tp <x> <z> | tp <${Object.keys(PLACES).join(' | ')}> — teleport`, ([a, b]) => {
+  const place = PLACES[a]?.() ?? (Number.isFinite(+a) && Number.isFinite(+b) ? { x: +a, z: +b } : null);
+  if (!place) throw new Error(`Usage: tp <x> <z> | tp <${Object.keys(PLACES).join(' | ')}>`);
+  if (player.inVehicle) {
+    const lane = LAYOUT.graph.nearestLane(place.x, place.z, 0, 0, -2, 80);
+    const p = lane ? lanePoint(lane.h, Math.max(4, Math.min(lane.s, LAYOUT.graph.edge(lane.h).len - 4))) : { x: place.x, z: place.z, d: [0, -1] };
+    player.vehicle.reset(p.x, p.z, Math.atan2(p.d[0], p.d[1]));
+  } else {
+    player.ped.reset(place.x, place.z);
+  }
+  rig.initialised = false;
+  const focus = { x: place.x, z: place.z };
+  traffic.repopulate(focus, allCars());
+  npcs.repopulate(focus);
+  parked.manage(focus, allCars(), disposeObject, 0);
+  return `Teleported to ${place.x.toFixed(0)}, ${place.z.toFixed(0)}.`;
+});
+
 // Performance overlay: shown while the console is open, or pinned with `stats on`.
 const perf = new PerfStats(renderer, () => {
   const cars = allCars();
@@ -459,7 +495,7 @@ devConsole.register('stats', 'stats [on | off] — keep the performance overlay 
 
 // Dev-only hook for debugging / automated tests.
 if (import.meta.env.DEV) {
-  window.__game = { parked, skids, player, traffic, npcs, lights, world, allCars, allPeds, step, input, wanted, police, combat, damage, rig, city, devConsole, STEP: 1 / 120 };
+  window.__game = { policeCtx, parked, skids, player, traffic, npcs, lights, world, allCars, allPeds, step, input, wanted, police, combat, damage, rig, city, devConsole, STEP: 1 / 120 };
 }
 
 // --- Main loop: fixed-step physics, variable-rate rendering ---

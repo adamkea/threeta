@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { isSmall, rayCollider } from '../world/colliders.js';
 
 const PED_HIT_RADIUS = 0.55; // people are drawn big, so they're a bit fatter to bullets than to cars
 const MUZZLE_FORWARD = 1.05; // where the muzzle sits relative to a person holding a gun out (m)
@@ -122,8 +123,8 @@ export class CombatSystem {
       for (const b of this.world.query(origin.x + dir.x * s, origin.y + dir.y * s)) {
         if (seen.has(b)) continue;
         seen.add(b);
-        if (b.maxX - b.minX < 1.5 && b.maxZ - b.minZ < 1.5) continue; // lamp posts / trees: shoot past
-        consider(rayBox(origin, dir, b), 'wall', b);
+        if (isSmall(b)) continue; // lamp posts / trees: shoot past
+        consider(rayCollider(origin, dir, b), 'wall', b);
       }
     }
     if (best) best.point = new THREE.Vector2().copy(origin).addScaledVector(dir, best.distance);
@@ -156,11 +157,6 @@ function rayCar(o, d, car) {
   const ld = { x: d.x * r.x + d.y * r.y, y: d.x * f.x + d.y * f.y };
   const hw = car.cfg.width / 2, hl = car.cfg.length / 2;
   return slab(lo, ld, -hw, hw, -hl, hl);
-}
-
-/** Slab test against an axis-aligned box on the ground plane. */
-function rayBox(o, d, b) {
-  return slab(o, d, b.minX, b.maxX, b.minZ, b.maxZ);
 }
 
 /** Distance along ray (o, d) into the box [x0, x1] × [z0, z1], 0 if starting inside, or null. */
