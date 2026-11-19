@@ -187,7 +187,7 @@ const policeCtx = { player, wanted, world };
 function step(dt) {
   const cars = allCars();
   const peds = allPeds();
-  const active = cars.filter((c) => c.active);
+  const active = cars.filter((c) => c.active && !c.overboard);
   player.step(dt, bustedTimer > 0 ? NO_INPUT : input, world);
   traffic.step(dt, cars, world, peds.filter(onRoad));
   police.step(dt, policeCtx);
@@ -215,9 +215,12 @@ function finishArrest() {
 
 function updateWanted(dt) {
   const hadStars = wanted.stars;
-  if (bustedTimer === 0 && !player.inVehicle && player.ped.dead) {
+  if (bustedTimer === 0 && player.inVehicle && player.vehicle.submerged) {
+    bustedTimer = 4; // went into the sea with the car
+    showBanner('DROWNED', 'dead', 4);
+  } else if (bustedTimer === 0 && !player.inVehicle && player.ped.dead) {
     bustedTimer = 4;
-    showBanner('FLATLINED', 'dead', 4);
+    showBanner(player.ped.overboard ? 'DROWNED' : 'FLATLINED', 'dead', 4);
   } else if (police.busted && bustedTimer === 0) {
     bustedTimer = 3;
     showBanner('BUSTED', 'busted', 3);

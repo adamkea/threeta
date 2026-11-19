@@ -1,5 +1,9 @@
 import * as THREE from 'three';
 import { MODELS, buildCarMesh } from './carModels.js';
+import { offIsland, WATER_Y } from '../world/City.js';
+
+const GRAVITY = 25; // m/s² (a touch heavy, so falls read well from the high camera)
+const SINK_DEPTH = -5; // how far a car sinks before settling on the seabed
 
 let nextId = 1;
 
@@ -47,6 +51,10 @@ export class Car {
     this.wheelSpin = 0;
     this.bodyRoll = 0;
     this.bodyPitch = 0;
+    // Driven off the edge of the island: falls (y, vy) into the sea and sinks.
+    this.overboard = false;
+    this.y = 0;
+    this.vy = 0;
     const parts = buildCarMesh(model, color ?? m.paints[0]);
     this.mesh = parts.root;
     this.body = parts.body;
@@ -78,6 +86,13 @@ export class Car {
     this.velocity.copy(this.forward).multiplyScalar(speed);
     this.steer = 0;
     this.yawRate = 0;
+    this.overboard = false;
+    this.y = this.vy = this.bodyPitch = 0;
+  }
+
+  /** Under the surface: the car is lost (and anyone inside it). */
+  get submerged() {
+    return this.y < WATER_Y - 0.8;
   }
 
   setColor(color) {
@@ -132,6 +147,8 @@ export class Car {
    * `world.query(x, z)` returns static AABB colliders near a point.
    */
   update(dt, controls, world) {
+    if (!this.overboard && offIsland(this.position.x, this.position.y)) this.overboard = true;
+    if (this.overboard) return this.#fall(dt);
     const c = this.cfg;
     const fwd = this.forward;
     const right = this.right;
@@ -199,6 +216,28 @@ export class Car {
     this.bodyRoll += (THREE.MathUtils.clamp(lateral, -0.08, 0.08) - this.bodyRoll) * Math.min(1, 6 * dt);
   }
 
+  /** Off the edge: no grip, no control. Momentum carries it out, the nose drops, then it sinks. */
+  #fall(dt) {
+    this.braking = this.handbrake = false;
+    this.slip = 0;
+    const inWater = this.y < WATER_Y;
+    if (inWater) {
+      // Water slows everything right down; the car settles slowly toward the bottom.
+      this.velocity.multiplyScalar(Math.exp(-2.5 * dt));
+      this.vy += (-1.2 - this.vy) * Math.min(1, 4 * dt);
+    } else {
+      this.vy -= GRAVITY * dt;
+    }
+    this.y = Math.max(SINK_DEPTH, this.y + this.vy * dt);
+    this.position.addScaledVector(this.velocity, dt);
+    this.heading += this.yawRate * dt;
+    this.yawRate *= Math.exp(-3 * dt);
+    // Nose-dive while airborne (the front wheels leave the quay first), easing level once afloat.
+    const pitch = inWater ? 0.35 : Math.min(0.9, -this.vy * 0.06);
+    this.bodyPitch += (pitch - this.bodyPitch) * Math.min(1, 5 * dt);
+    this.bodyRoll *= Math.exp(-2 * dt);
+  }
+
   /** Two collision circles along the car's long axis, resolved against AABBs. */
   #collide(world) {
     const c = this.cfg;
@@ -255,7 +294,7 @@ export class Car {
 
   /** Copy physics state onto the Three.js mesh. Call once per rendered frame. */
   syncMesh() {
-    this.mesh.position.set(this.position.x, 0, this.position.y);
+    this.mesh.position.set(this.position.x, this.y, this.position.y);
     this.mesh.rotation.y = this.heading;
     this.body.rotation.set(this.bodyPitch, 0, this.bodyRoll);
     for (const w of this.wheels) {
