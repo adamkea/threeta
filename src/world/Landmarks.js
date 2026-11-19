@@ -9,11 +9,7 @@ import { toon } from '../render/toon.js';
 //
 // All coordinates below are block-local: (0, 0) is the block centre, y = 0 is the sidewalk.
 
-/** Which blocks hold which landmark (block indices, 0..CITY.blocks-1). */
-export const LANDMARK_BLOCKS = [
-  { kind: 'police', bx: 2, bz: 4 },
-  { kind: 'hospital', bx: 5, bz: 2 },
-];
+// Which blocks hold them is decided in CityLayout.js (assignUses).
 
 /**
  * Builds one landmark centred on (cx, cz) with its ground floor at height y0.

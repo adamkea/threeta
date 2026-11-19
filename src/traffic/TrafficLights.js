@@ -1,14 +1,15 @@
 import * as THREE from 'three';
-import { CITY } from '../world/City.js';
+import { CITY, LAYOUT } from '../world/CityLayout.js';
 import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeometry.js';
 import { toon } from '../render/toon.js';
-import { DIRS, HALF_ROAD, LANE_OFFSET, axisOf, isValidNode, nodeX, rightOf } from './RoadNetwork.js';
+import { GRAPH } from './RoadNetwork.js';
 
-// Signal timings (seconds). The Z axis gets green first, then X; short all-red between.
+// Signal timings (seconds). Each junction's phases (roads arriving from opposite directions
+// share one) take turns: green, yellow, then a short all-red before the next.
 const GREEN = 7;
 const YELLOW = 2;
 const ALL_RED = 1;
-const CYCLE = 2 * (GREEN + YELLOW + ALL_RED);
+const SLOT = GREEN + YELLOW + ALL_RED;
 
 const COLORS = {
   green: new THREE.Color(0x35ff7a),
@@ -25,34 +26,46 @@ const LAMPS = ['red', 'yellow', 'green']; // top to bottom
 
 export class TrafficLights {
   constructor(rng) {
-    const n = CITY.blocks + 1;
-    this.n = n;
     this.time = 0;
-    this.offsets = Array.from({ length: n * n }, () => rng.range(0, CYCLE));
+    this.offsets = GRAPH.nodes.map((n) => rng.range(0, SLOT * (n.phases || 1)));
     this.mesh = this.#buildMesh();
   }
 
-  /** 'green' | 'yellow' | 'red' for traffic travelling along `axis` through node (i, j). */
-  state(i, j, axis) {
-    let t = (this.time + this.offsets[i * this.n + j]) % CYCLE;
-    if (axis === 'x') t = (t + CYCLE / 2) % CYCLE;
-    if (t < GREEN) return 'green';
-    if (t < GREEN + YELLOW) return 'yellow';
-    return 'red';
+  /** Where junction `node` is in its cycle: [active phase, seconds into that phase's slot]. */
+  #slot(node) {
+    const n = GRAPH.nodes[node];
+    const t = (this.time + this.offsets[node]) % (SLOT * n.phases);
+    const phase = Math.floor(t / SLOT);
+    return [phase, t - phase * SLOT, n];
   }
 
-  /** Seconds of green left for traffic along `axis` at node (i, j); 0 if not green. */
-  greenRemaining(i, j, axis) {
-    let t = (this.time + this.offsets[i * this.n + j]) % CYCLE;
-    if (axis === 'x') t = (t + CYCLE / 2) % CYCLE;
-    return t < GREEN ? GREEN - t : 0;
+  /** 'green' | 'yellow' | 'red' for traffic arriving at junction `node` along road `edge`. */
+  state(node, edge) {
+    if (!GRAPH.nodes[node].signal) return 'green';
+    const [phase, t, n] = this.#slot(node);
+    if (n.phaseOf.get(edge) !== phase) return 'red';
+    return t < GREEN ? 'green' : t < GREEN + YELLOW ? 'yellow' : 'red';
+  }
+
+  /**
+   * Seconds left for people to cross road `edge` at junction `node`: while its own traffic is
+   * held at red, until that traffic is next about to get a green. Infinity without signals.
+   */
+  walkRemaining(node, edge) {
+    const n = GRAPH.nodes[node];
+    if (!n.signal) return Infinity;
+    const [phase, t] = this.#slot(node);
+    const mine = n.phaseOf.get(edge);
+    if (mine === phase) return 0;
+    const slotsUntil = (mine - phase + n.phases) % n.phases; // full slots before ours starts
+    return slotsUntil * SLOT - t - YELLOW - ALL_RED;
   }
 
   update(dt) {
     this.time += dt;
     const lenses = this.lenses;
     this.mounts.forEach(({ head }, k) => {
-      const lit = this.state(head.i, head.j, head.axis);
+      const lit = this.state(head.node, head.edge);
       LAMPS.forEach((lamp, l) => lenses.setColorAt(k * 3 + l, lamp === lit ? COLORS[lamp] : DIM[lamp]));
     });
     lenses.instanceColor.needsUpdate = true;
@@ -64,30 +77,16 @@ export class TrafficLights {
    * shared instanced parts: backplate, housing, three visored lenses (red / yellow / green).
    */
   #buildMesh() {
-    const heads = [];
-    const corner = HALF_ROAD + 1.2; // matches lamp placement in City.js
-    const limit = CITY.half - CITY.roadWidth;
-    for (let i = 0; i < this.n; i++) {
-      for (let j = 0; j < this.n; j++) {
-        for (const d of DIRS) {
-          if (!isValidNode(i - d[0], j - d[1])) continue; // nobody approaches from outside
-          const r = rightOf(d);
-          const x = nodeX(i) + (-d[0] + r[0]) * corner;
-          const z = nodeX(j) + (-d[1] + r[1]) * corner;
-          if (Math.abs(x) > limit || Math.abs(z) > limit) continue; // no pole there
-          heads.push({ i, j, axis: axisOf(d), d, r, x, z });
-        }
-      }
-    }
+    // Poles stand where City.js puts a street lamp for each one (see CityLayout signalHeads).
+    const heads = LAYOUT.signalHeads;
     this.heads = heads;
 
     const y0 = CITY.curbHeight;
     const armY = y0 + 5.55;
-    const reach = corner - LANE_OFFSET; // pole -> over the centre of the approaching lane
     this.mounts = [];
     const arms = [];
     for (const head of heads) {
-      const { d, r, x, z } = head;
+      const { d, r, x, z, reach } = head; // reach: pole -> over the centre of the approaching lane
       const yaw = Math.atan2(-d[0], -d[1]); // lenses (+Z local) face the oncoming drivers
       // Over-lane head, hanging from the end of the mast arm.
       this.mounts.push({ head, x: x - r[0] * reach, y: armY - 0.95, z: z - r[1] * reach, yaw, hanger: true });

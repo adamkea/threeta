@@ -75,6 +75,28 @@ ram you. Stop, or go on foot, and an officer jumps out to make the arrest. Beat 
 Get caught and you're **BUSTED**: you lose the car and walk out of the **police station** with a clean record. To get away, break
 line of sight and keep your distance. The stars flash, and a bar fills until the police give up.
 
+## The city
+
+The city isn't a plain grid any more. `src/world/CityLayout.js` generates it, deterministically, as a
+**road graph**: junctions joined by straight roads of any angle and width. Every system drives, walks and
+draws from that graph.
+
+- **Uneven blocks:** each row and column of the underlying lattice has its own width (34–58 m).
+- **Avenues:** one wide (18 m) avenue each way across town, plus a **diagonal avenue** cutting corner to
+  corner through a run of blocks. It splits them into triangles and makes big 6-way junctions with
+  three-phase signals.
+- **Superblocks:** a 2×2 central park, and a few pairs of blocks joined where a street was closed, which
+  leaves T-junctions behind.
+- **Blocks are convex polygons** (the faces of the graph). They are filled with buildings by splitting the
+  footprint along its longest side, so plots on the diagonal sit square to it. Some blocks are parks or
+  plazas, car parks or landmarks instead.
+
+To change the layout, edit `generate()` in `CityLayout.js`: block sizes, which lines are avenues, the
+diagonal's path, which streets close. Junction geometry (how far each junction box reaches, crosswalks,
+stop lines, signal phases and poles) is all derived from the graph.
+
+Dev console (**`**): `tp <x> <z>` or `tp spawn | police | hospital | diagonal | park` teleports you.
+
 ## Look
 
 Comic-book rendering in the spirit of Chinatown Wars: toon (banded) materials (`src/render/toon.js`)
@@ -84,26 +106,29 @@ edges and boosts saturation. Roads have double-yellow centre lines, stop lines a
 ## Layout
 
 - `src/main.js` – renderer, lighting, fixed-step game loop
-- `src/world/City.js` – procedural seeded city grid (roads, markings, buildings, parks, lamps) + AABB colliders
+- `src/world/CityLayout.js` – the city as data: road graph (junctions, roads, setbacks, signal phases), blocks (convex polygons) and what's on them, the pedestrian walk graph, signal pole spots, `groundHeight`
+- `src/world/City.js` – meshes and colliders built from the layout (road markings, sidewalks, buildings, parks, car parks, lamps)
+- `src/world/geom.js` – 2D convex-polygon helpers (inset, clip, point tests)
+- `src/world/colliders.js` – static collider tests shared by cars, people, bullets and sight lines (boxes, plus convex polygons for angled buildings)
 - `src/vehicles/Car.js` – arcade car physics (grip/drift, steering, collisions) and mesh
-- `src/world/Landmarks.js` – special whole-block buildings: the police station (where you end up when busted) and the hospital (where you end up when you die); which blocks they sit on, their meshes, signs, roof markings and respawn points
+- `src/world/Landmarks.js` – special whole-block buildings: the police station (where you end up when busted) and the hospital (where you end up when you die); their meshes, signs, roof markings and respawn points
 - `src/vehicles/damage.js` / `VehicleDamageSystem.js` – damage states for every vehicle; smoke, fire, explosions
 - `src/world/ColliderGrid.js` – spatial hash so cars only test nearby static colliders
 - `src/core/SpatialHash.js` – grids of the moving cars and people, rebuilt each physics step, so AI and collisions only look at neighbours
-- `src/traffic/RoadNetwork.js` – lane geometry helpers over the intersection grid (right-hand traffic)
-- `src/traffic/TrafficLights.js` – per-intersection signal cycles + signal heads on the lamp posts
+- `src/traffic/RoadNetwork.js` – lane geometry helpers over the road graph (right-hand traffic)
+- `src/traffic/TrafficLights.js` – per-junction signal phases (opposite approaches share a green) + signal heads on the lamp posts
 - `src/traffic/TrafficDriver.js` – AI driver: random routes, pure-pursuit steering, obeys lights, queues, overtakes stopped cars, rejoins lanes after crashes
 - `src/traffic/TrafficSystem.js` – pooled AI cars spawned out of view around the player and recycled when far away
 - `src/physics/carCollisions.js` – car-vs-car impulses with spin
 - `src/characters/Pedestrian.js` – person on foot: movement, collisions, walk/run animation, knockdown; clothing & accessories (hats, jackets, badges, belts, masks…) toggled per look
 - `src/characters/outfits.js` – character looks: civilians, cops (white-topped cap, navy uniform, badge, gold epaulettes) and three gangs (Red Fangs: red do-rags & bandanas; Violet Saints: purple tracksuits & backwards caps; Lime Vipers: lime hoodies, hoods up), plus gang turf (neutral downtown, outskirts split three ways) and who spawns where
 - `src/characters/NpcManager.js` – pooled pedestrians around the player: stroll the sidewalks, cross at zebra crossings on a green, dodge oncoming cars, scatter when someone gets run over; carjacked drivers flee then calm down
-- `src/characters/Sidewalks.js` – pedestrian walk graph (block-corner waypoints, crossings tied to junction lights)
+- `src/characters/Sidewalks.js` – pedestrian walk graph (block corners and crosswalk ends, crossings tied to junction lights)
 - `src/player/PlayerController.js` – player state: driving vs on foot, entering/exiting/hijacking cars
 - `src/physics/pedCollisions.js` – people vs cars (shoved, or knocked down by fast impacts) and people vs people
 - `src/police/Wanted.js` – crimes → heat → stars; evasion timer while out of sight
 - `src/police/PoliceSystem.js` – spawns/retires patrol cars by wanted level, pulls patrol cars out of traffic, deploys officers, sends beat cops after you, decides arrests
-- `src/police/PursuitDriver.js` – police driving: junction-to-junction navigation over the road grid toward you, then straight at you (leading your movement) when in view; three-point turns and backing out when stuck
+- `src/police/PursuitDriver.js` – police driving: shortest-route navigation over the road graph toward you, then straight at you (leading your movement) when in view; three-point turns and backing out when stuck
 - `src/police/sight.js` – line-of-sight test against buildings
 - `src/combat/Health.js` – hit points (damage / heal / dead) for anything that can be hurt
 - `src/combat/weapons.js` – weapon definitions (`WEAPONS`) and `Weapon` (ammo, fire-rate cooldown, reload)

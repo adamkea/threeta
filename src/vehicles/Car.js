@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { circlePush } from '../world/colliders.js';
 import { MODELS, buildCarMesh } from './carModels.js';
 import { offIsland, WATER_Y } from '../world/City.js';
 import { showBone } from '../render/skinBake.js';
@@ -304,26 +305,9 @@ export class Car {
         const cx = this.position.x + fwd.x * offset * sign;
         const cz = this.position.y + fwd.y * offset * sign;
         for (const b of world.query(cx, cz)) {
-          if (cx < b.minX - r || cx > b.maxX + r || cz < b.minZ - r || cz > b.maxZ + r) continue;
-          const px = THREE.MathUtils.clamp(cx, b.minX, b.maxX);
-          const pz = THREE.MathUtils.clamp(cz, b.minZ, b.maxZ);
-          let nx = cx - px;
-          let nz = cz - pz;
-          let dist = Math.hypot(nx, nz);
-          if (dist >= r) continue;
-
-          let depth;
-          if (dist > 1e-6) {
-            nx /= dist;
-            nz /= dist;
-            depth = r - dist;
-          } else {
-            // Circle centre inside the box: push out along the shallowest axis.
-            const dl = cx - b.minX, dr = b.maxX - cx, dt = cz - b.minZ, db = b.maxZ - cz;
-            const m = Math.min(dl, dr, dt, db);
-            [nx, nz] = m === dl ? [-1, 0] : m === dr ? [1, 0] : m === dt ? [0, -1] : [0, 1];
-            depth = m + r;
-          }
+          const push = circlePush(b, cx, cz, r);
+          if (!push) continue;
+          const { nx, nz, depth } = push;
 
           this.position.x += nx * depth;
           this.position.y += nz * depth;

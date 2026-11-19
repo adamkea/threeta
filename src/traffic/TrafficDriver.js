@@ -1,7 +1,4 @@
-import { CITY } from '../world/City.js';
-import {
-  DIRS, EXIT_DIST, LANE_OFFSET, STOP_DIST, axisOf, isValidNode, nodeRange, nodeX, rightOf,
-} from './RoadNetwork.js';
+import { EXIT_GAP, GRAPH, STOP_GAP, rightOf, stopAlong } from './RoadNetwork.js';
 
 const DECEL = 6; // comfortable braking (m/s²) used for speed planning
 const TURN_SPEED = 6.5;
@@ -15,17 +12,16 @@ const _wide = [];
 
 
 /**
- * AI that drives a Car along lanes: picks a random route at each intersection,
+ * AI that drives a Car along lanes: picks a random route at each junction,
  * follows it with pure-pursuit steering, stops at red lights and behind other cars.
  */
 export class TrafficDriver {
-  /** Start on the lane heading from node `from` in direction `dir`, at world point (x, z). */
-  constructor(car, rng, from, dir, x, z) {
+  /** Start in the lane of half-edge `h` (see RoadNetwork.js), at world point (x, z). */
+  constructor(car, rng, h, x, z) {
     this.car = car;
     this.rng = rng;
-    this.from = from;
-    this.dir = dir;
-    this.points = [{ x, z }];
+    this.he = h; // the half-edge the end of the planned route is on
+    this.points = [{ x, z, lane: GRAPH.edge(h).lane }];
     this.stops = [];
     this.cruise = rng.range(10, 14);
     this.lost = false; // knocked off its route; waits, then tries to rejoin a lane
@@ -40,58 +36,72 @@ export class TrafficDriver {
     while (this.points.length < 8) this.#extend();
   }
 
-  /** Append the next intersection (stop line, turn curve, exit) to the route. */
+  /** Append the next junction (stop line, turn curve, exit) to the route. */
   #extend() {
-    const [i, j] = this.from;
-    const d = this.dir;
-    const B = [i + d[0], j + d[1]];
-    const bx = nodeX(B[0]);
-    const bz = nodeX(B[1]);
+    const g = GRAPH;
+    const h = this.he;
+    const Bn = g.nodes[g.to(h)];
+    const d = g.dir(h);
     const r = rightOf(d);
+    const e = g.edge(h);
 
-    // Choose where to go next: never U-turn, favour going straight.
-    const options = DIRS.filter((d2) => !(d2[0] === -d[0] && d2[1] === -d[1]) && isValidNode(B[0] + d2[0], B[1] + d2[1]));
-    const straight = options.find((d2) => d2[0] === d[0] && d2[1] === d[1]);
-    const d2 = straight && this.rng.chance(0.5) ? straight : this.rng.pick(options);
+    // Choose where to go next: never U-turn (unless it's a dead end), favour going straight.
+    let options = Bn.out.filter((o) => o !== (h ^ 1));
+    if (!options.length) options = [h ^ 1];
+    let straight = null, best = 0.7;
+    for (const o of options) {
+      const [x, z] = g.dir(o);
+      const dot = x * d[0] + z * d[1];
+      if (dot > best) (best = dot), (straight = o);
+    }
+    const h2 = straight !== null && this.rng.chance(0.5) ? straight : this.rng.pick(options);
+    const d2 = g.dir(h2);
     const r2 = rightOf(d2);
-    const turning = d2 !== straight;
-    const leftTurn = d2[0] === -r[0] && d2[1] === -r[1];
+    const e2 = g.edge(h2);
+    const turning = d[0] * d2[0] + d[1] * d2[1] < 0.94;
+    const side = d2[0] * r[0] + d2[1] * r[1]; // > 0: turning right
+    const leftTurn = turning && side < -0.3;
 
-    const p0 = { x: bx - d[0] * STOP_DIST + r[0] * LANE_OFFSET, z: bz - d[1] * STOP_DIST + r[1] * LANE_OFFSET };
-    const p1 = { x: bx + d2[0] * EXIT_DIST + r2[0] * LANE_OFFSET, z: bz + d2[1] * EXIT_DIST + r2[1] * LANE_OFFSET };
+    const stopBack = g.setbackEnd(h) + STOP_GAP;
+    const exitOut = g.setbackStart(h2) + EXIT_GAP;
+    const p0 = { x: Bn.x - d[0] * stopBack + r[0] * e.lane, z: Bn.z - d[1] * stopBack + r[1] * e.lane, lane: e.lane };
+    const p1 = { x: Bn.x + d2[0] * exitOut + r2[0] * e2.lane, z: Bn.z + d2[1] * exitOut + r2[1] * e2.lane, lane: e2.lane };
     this.points.push(p0);
-    this.stops.push({ ...p0, dir: d, node: B, axis: axisOf(d), turning, leftTurn });
+    this.stops.push({ ...p0, dir: d, node: Bn.id, edge: e.id, turning, leftTurn });
 
-    if (leftTurn) {
-      // Cubic that cuts inside the junction centre, so opposing left turns pass side by side.
-      const h = 4;
-      const c1 = { x: p0.x + d[0] * h, z: p0.z + d[1] * h };
-      const c2 = { x: p1.x - d2[0] * h, z: p1.z - d2[1] * h };
-      for (let t = 1 / 6; t < 1.01; t += 1 / 6) {
-        const u = 1 - t;
-        const a = u * u * u, b = 3 * u * u * t, c = 3 * u * t * t, e = t * t * t;
-        this.points.push({
-          x: a * p0.x + b * c1.x + c * c2.x + e * p1.x,
-          z: a * p0.z + b * c1.z + c * c2.z + e * p1.z,
-          curve: true,
-        });
+    if (turning || Math.abs(side) > 0.05) {
+      // Cubic Bézier from the stop line to the exit, tangent to both lanes. Right turns and
+      // slight bends hug the corner where the two lane lines meet; left turns cut inside the
+      // junction centre, so opposing left turns pass side by side.
+      const gap = Math.hypot(p1.x - p0.x, p1.z - p0.z);
+      let h0 = gap / 3, h1 = gap / 3;
+      const den = d[0] * d2[1] - d[1] * d2[0];
+      if (Math.abs(den) > 0.05) {
+        const s = ((p1.x - p0.x) * d2[1] - (p1.z - p0.z) * d2[0]) / den; // along our lane to the meeting point
+        const u = ((p1.x - p0.x) * d[1] - (p1.z - p0.z) * d[0]) / den; // and back along theirs
+        if (s > 0 && u > 0) {
+          const k = leftTurn ? 0.3 : 0.62;
+          h0 = s * k;
+          h1 = u * k;
+        }
       }
-    } else if (turning) {
-      // Quadratic Bézier through the corner where the entry and exit lane lines meet.
-      const c = { x: bx + (r[0] + r2[0]) * LANE_OFFSET, z: bz + (r[1] + r2[1]) * LANE_OFFSET };
-      for (let t = 0.2; t < 1.01; t += 0.2) {
-        const u = 1 - t;
+      const c1 = { x: p0.x + d[0] * h0, z: p0.z + d[1] * h0 };
+      const c2 = { x: p1.x - d2[0] * h1, z: p1.z - d2[1] * h1 };
+      const steps = turning ? 6 : 3;
+      for (let i = 1; i <= steps; i++) {
+        const t = i / steps, w = 1 - t;
+        const a = w * w * w, b = 3 * w * w * t, c = 3 * w * t * t, f = t * t * t;
         this.points.push({
-          x: u * u * p0.x + 2 * u * t * c.x + t * t * p1.x,
-          z: u * u * p0.z + 2 * u * t * c.z + t * t * p1.z,
-          curve: true,
+          x: a * p0.x + b * c1.x + c * c2.x + f * p1.x,
+          z: a * p0.z + b * c1.z + c * c2.z + f * p1.z,
+          lane: e2.lane,
+          curve: turning,
         });
       }
     } else {
       this.points.push(p1);
     }
-    this.from = B;
-    this.dir = d2;
+    this.he = h2;
   }
 
   /**
@@ -136,7 +146,8 @@ export class TrafficDriver {
     }
     // How far outside the road corridor we are: our lane through to the oncoming lane is fine.
     const lat = (pos.x - proj.x) * proj.lx + (pos.y - proj.z) * proj.lz; // + = left
-    const corridor = LANE_OFFSET * 2 + 1;
+    const lane = this.points[1].lane ?? 3.5;
+    const corridor = lane * 2 + 1;
     const dev = lat < -1 ? -1 - lat : lat > corridor ? lat - corridor : 0;
     if (dev > 6) {
       this.lost = true;
@@ -156,7 +167,7 @@ export class TrafficDriver {
     const look = (this.overtaking || this.shift > 0.5 ? 5 : 3) + Math.abs(vF) * 0.35;
     const target = this.#pointAlong(proj, look);
     // Lateral offset changes per metre travelled (not per second), so a stopped car never drifts.
-    const shiftGoal = this.overtaking ? LANE_OFFSET * 2 : 0;
+    const shiftGoal = this.overtaking ? lane * 2 : 0;
     this.shift += (shiftGoal - this.shift) * Math.min(1, 0.3 * Math.abs(vF) * dt);
     const tx = target.x + target.lx * this.shift - pos.x;
     const tz = target.z + target.lz * this.shift - pos.y;
@@ -174,7 +185,7 @@ export class TrafficDriver {
     if (stop) {
       const dist = this.#along(stop);
       if (stop.turning) desired = Math.min(desired, Math.sqrt(TURN_SPEED ** 2 + 2 * DECEL * Math.max(0, dist)));
-      const light = lights.state(stop.node[0], stop.node[1], stop.axis);
+      const light = lights.state(stop.node, stop.edge);
       const canStop = dist > (vF * vF) / (2 * DECEL * 1.5);
       // (Yielding only matters within braking range: from 20 m out, sqrt(2·DECEL·dist) is
       // already above any cruise speed, so further away there's nothing to check.)
@@ -231,35 +242,30 @@ export class TrafficDriver {
   #rejoin() {
     const pos = this.car.position;
     const fwd = this.car.forward;
+    const g = GRAPH;
     let best = null;
-    // Only lanes that could be within the 10 m we'll accept.
-    const ri = nodeRange(pos.x, 10);
-    const rj = nodeRange(pos.y, 10);
-    if (!ri || !rj) return;
-    for (let i = ri[0]; i <= ri[1]; i++) {
-      for (let j = rj[0]; j <= rj[1]; j++) {
-        for (const d of DIRS) {
-          if (!isValidNode(i + d[0], j + d[1]) || d[0] * fwd.x + d[1] * fwd.y < 0.3) continue;
-          const r = rightOf(d);
-          // Lane segment from leaving node (i, j) to the stop line of the next node.
-          const ax = nodeX(i) + r[0] * LANE_OFFSET, az = nodeX(j) + r[1] * LANE_OFFSET;
-          const maxS = CITY.cell - STOP_DIST - 1;
-          const s = (pos.x - ax) * d[0] + (pos.y - az) * d[1];
-          const sc = Math.min(Math.max(s, 0), maxS);
-          const px = ax + d[0] * sc, pz = az + d[1] * sc;
-          const dist = Math.hypot(pos.x - px, pos.y - pz);
-          // Aim a few metres further along the lane — it must be in front of us.
-          const ts = Math.min(sc + 5, maxS);
-          const tx = ax + d[0] * ts, tz = az + d[1] * ts;
-          if ((tx - pos.x) * fwd.x + (tz - pos.y) * fwd.y < 1) continue;
-          if (!best || dist < best.dist) best = { dist, i, j, d, tx, tz };
-        }
+    for (const id of g.edgesNear(pos.x, pos.y, 10)) {
+      for (const h of [id * 2, id * 2 + 1]) {
+        const d = g.dir(h);
+        if (d[0] * fwd.x + d[1] * fwd.y < 0.3) continue;
+        const A = g.nodes[g.from(h)];
+        const lane = g.edge(h).lane;
+        // Lane segment from leaving the start node to the stop line at the far end.
+        const ax = A.x - d[1] * lane, az = A.z + d[0] * lane;
+        const maxS = stopAlong(h) - 1;
+        if (maxS <= 0) continue;
+        const sc = Math.min(Math.max((pos.x - ax) * d[0] + (pos.y - az) * d[1], 0), maxS);
+        const dist = Math.hypot(pos.x - (ax + d[0] * sc), pos.y - (az + d[1] * sc));
+        // Aim a few metres further along the lane — it must be in front of us.
+        const ts = Math.min(sc + 5, maxS);
+        const tx = ax + d[0] * ts, tz = az + d[1] * ts;
+        if ((tx - pos.x) * fwd.x + (tz - pos.y) * fwd.y < 1) continue;
+        if (!best || dist < best.dist) best = { dist, h, tx, tz, lane };
       }
     }
     if (!best || best.dist > 10) return; // stranded (e.g. in a park): stay put until recycled
-    this.from = [best.i, best.j];
-    this.dir = best.d;
-    this.points = [{ x: pos.x, z: pos.y }, { x: best.tx, z: best.tz }];
+    this.he = best.h;
+    this.points = [{ x: pos.x, z: pos.y, lane: best.lane }, { x: best.tx, z: best.tz, lane: best.lane }];
     this.stops = [];
     this.shift = 0;
     while (this.points.length < 8) this.#extend();
@@ -309,11 +315,12 @@ export class TrafficDriver {
       const side = ox * rx + oz * rz; // negative = to our left
       if (along < 0 || along > 40 || side > -3 || side < -12) continue;
       const theirStop = o.ai?.stops[0];
-      if (theirStop?.leftTurn && theirStop.node[0] === stop.node[0] && theirStop.node[1] === stop.node[1]) continue;
+      if (theirStop?.leftTurn && theirStop.node === stop.node) continue;
       // A car waiting far back (e.g. queued) isn't a threat; anything moving or close is.
       if (o.speed < 0.5 && along > 22) continue;
       // Already past the junction centre heading away? Then it's clear.
-      const toNode = (nodeX(stop.node[0]) - o.position.x) * o.forward.x + (nodeX(stop.node[1]) - o.position.y) * o.forward.y;
+      const N = GRAPH.nodes[stop.node];
+      const toNode = (N.x - o.position.x) * o.forward.x + (N.z - o.position.y) * o.forward.y;
       if (toNode < -3) continue;
       return true;
     }
@@ -342,11 +349,12 @@ export class TrafficDriver {
     // Search a strip along the oncoming lane: from just behind us to past the blocker, far enough
     // ahead to see anything that could close the gap at up to MAX_CLOSING.
     const x0 = me.position.x, z0 = me.position.y;
+    const lane = this.points[1].lane ?? 3.5;
     const reach = bAlong + 10 + MAX_CLOSING * 4;
     const lx = -right.x, lz = -right.y; // left
     let minX = Infinity, minZ = Infinity, maxX = -Infinity, maxZ = -Infinity;
     for (const a of [-4, reach]) {
-      for (const l of [0, 11]) {
+      for (const l of [0, lane * 2 + 4]) {
         const x = x0 + fwd.x * a + lx * l, z = z0 + fwd.y * a + lz * l;
         minX = Math.min(minX, x), maxX = Math.max(maxX, x), minZ = Math.min(minZ, z), maxZ = Math.max(maxZ, z);
       }
@@ -357,7 +365,7 @@ export class TrafficDriver {
       const rx = o.position.x - me.position.x, rz = o.position.y - me.position.y;
       const along = rx * fwd.x + rz * fwd.y;
       const left = -(rx * right.x + rz * right.y);
-      if (left < 3.5 - 2.5 || left > 3.5 * 2 + 2.5) continue; // not in the oncoming lane
+      if (left < lane - 2.5 || left > lane * 2 + 2.5) continue; // not in the oncoming lane
       const closing = Math.max(0, -o.velocity.dot(fwd)); // its speed toward us
       if (along > -3 && along < bAlong + 10 + closing * 4) return false;
     }

@@ -1,4 +1,5 @@
-import { CITY, LOT, blockMin } from '../world/City.js';
+import { CITY, LAYOUT, LOT } from '../world/City.js';
+import { offsetConvex } from '../world/geom.js';
 
 // Map of the whole city on a 2D canvas over the game. Same north-up view as the camera:
 // +X is right, +Z is down. The streets and buildings are drawn once to an offscreen
@@ -70,33 +71,42 @@ export class CityMap {
     g.strokeStyle = '#9a9384';
     g.strokeRect(...rect(-CITY.half, -CITY.half, CITY.half, CITY.half));
 
+    const path = (poly) => {
+      g.beginPath();
+      poly.forEach((p, i) => {
+        const [x, y] = this.toPx(p.x, p.z, size);
+        if (i) g.lineTo(x, y);
+        else g.moveTo(x, y);
+      });
+      g.closePath();
+    };
+
     // Double-yellow centre lines along every road.
+    const graph = LAYOUT.graph;
     g.strokeStyle = '#f2c230';
     g.lineWidth = Math.max(1, 0.5 * s);
     g.beginPath();
-    for (let i = 0; i <= CITY.blocks; i++) {
-      const c0 = -CITY.half + CITY.roadWidth / 2 + i * CITY.cell;
-      const [a] = this.toPx(c0, 0, size);
-      const [, b] = this.toPx(0, c0, size);
-      const [lo] = this.toPx(-CITY.half, 0, size);
-      const [hi] = this.toPx(CITY.half, 0, size);
-      g.moveTo(a, lo), g.lineTo(a, hi);
-      g.moveTo(lo, b), g.lineTo(hi, b);
+    for (const e of graph.edges) {
+      const A = graph.nodes[e.a], B = graph.nodes[e.b];
+      const [ax, ay] = this.toPx(A.x, A.z, size);
+      const [bx, by] = this.toPx(B.x, B.z, size);
+      g.moveTo(ax, ay), g.lineTo(bx, by);
     }
     g.stroke();
 
     // Blocks (sidewalks), then parks, then buildings shaded by height.
     g.fillStyle = SIDEWALK;
-    for (let bx = 0; bx < CITY.blocks; bx++) {
-      for (let bz = 0; bz < CITY.blocks; bz++) {
-        const x0 = blockMin(bx), z0 = blockMin(bz);
-        g.fillRect(...rect(x0, z0, x0 + CITY.blockSize, z0 + CITY.blockSize));
-      }
+    for (const b of this.city.blocks) {
+      if (b.use === 'lot') continue;
+      path(b.shape);
+      g.fill();
     }
     g.fillStyle = GRASS;
-    for (const { x0, z0 } of this.city.parks) {
-      const i = CITY.sidewalk;
-      g.fillRect(...rect(x0 + i, z0 + i, x0 + CITY.blockSize - i, z0 + CITY.blockSize - i));
+    for (const b of this.city.parks) {
+      const inner = offsetConvex(b.shape, CITY.sidewalk);
+      if (!inner) continue;
+      path(inner);
+      g.fill();
     }
     this.drawLots(g, size, s, rect);
 
@@ -110,9 +120,15 @@ export class CityMap {
       const gg = Math.min(255, ((b.color >> 8) & 255) * k);
       const bl = Math.min(255, (b.color & 255) * k);
       g.fillStyle = `rgb(${r | 0},${gg | 0},${bl | 0})`;
-      const rr = rect(b.minX, b.minZ, b.maxX, b.maxZ);
-      g.fillRect(...rr);
-      g.strokeRect(...rr);
+      if (b.poly) {
+        path(b.poly);
+        g.fill();
+        g.stroke();
+      } else {
+        const rr = rect(b.minX, b.minZ, b.maxX, b.maxZ);
+        g.fillRect(...rr);
+        g.strokeRect(...rr);
+      }
     }
     this.drawLandmarks(g, size, s);
   }
@@ -151,21 +167,24 @@ export class CityMap {
   /** Parking lots: road-coloured with bay lines and a big "P" so they're easy to find. */
   drawLots(g, size, s, rect) {
     const i = CITY.sidewalk;
-    for (const { x0, z0 } of this.city.lots) {
+    for (const lot of this.city.lots) {
+      const { x0, z0, w, d } = lot;
+      g.fillStyle = SIDEWALK;
+      g.fillRect(...rect(x0, z0, x0 + w, z0 + d));
       g.fillStyle = ROAD;
-      g.fillRect(...rect(x0 + i, z0 + i, x0 + CITY.blockSize - i, z0 + CITY.blockSize - i));
-      for (const [a, b] of LOT.aisles) g.fillRect(...rect(x0, z0 + a, x0 + CITY.blockSize, z0 + b));
+      g.fillRect(...rect(x0 + i, z0 + i, x0 + w - i, z0 + d - i));
+      for (const [a, b] of lot.aisles) g.fillRect(...rect(x0, z0 + a, x0 + w, z0 + b));
       g.strokeStyle = 'rgba(238,234,224,0.7)';
       g.lineWidth = Math.max(1, 0.2 * s);
       g.beginPath();
-      for (const row of LOT.rows) {
-        for (let k = 0; k <= LOT.bays; k++) {
-          const [px, py] = this.toPx(x0 + LOT.x0 + k * LOT.bayWidth, z0 + row.z0, size);
+      for (const row of lot.rows) {
+        for (let k = 0; k <= lot.bays; k++) {
+          const [px, py] = this.toPx(x0 + lot.bx0 + k * LOT.bayWidth, z0 + row.z0, size);
           g.moveTo(px, py), g.lineTo(px, py + (row.z1 - row.z0) * s);
         }
       }
       g.stroke();
-      const [cx, cy] = this.toPx(x0 + CITY.blockSize / 2, z0 + CITY.blockSize / 2, size);
+      const [cx, cy] = this.toPx(x0 + w / 2, z0 + d / 2, size);
       const r = 7 * s;
       g.fillStyle = '#1f5fbf';
       g.fillRect(cx - r, cy - r, r * 2, r * 2);

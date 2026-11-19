@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { Pedestrian } from './Pedestrian.js';
 import { groundHeight } from '../world/City.js';
-import { coord, crossingOf, indexRange, isValid, nearestIndex, neighbours } from './Sidewalks.js';
+import { WALK, nearestWaypoint, waypoint, waypointsNear } from './Sidewalks.js';
 
 import { civilianLook, copLook, rollPerson } from './outfits.js';
 
@@ -163,7 +163,7 @@ export class NpcManager {
           const faceTo = Math.atan2(c.dir.x, c.dir.y);
           const diff = Math.atan2(Math.sin(faceTo - p.heading), Math.cos(faceTo - p.heading));
           p.heading += diff * Math.min(1, 6 * dt);
-          const green = lights.greenRemaining(c.node[0], c.node[1], c.greenAxis);
+          const green = lights.walkRemaining(c.node, c.edge);
           if (green > CROSS_GREEN_NEEDED && roadClear(near.cars.query(c.mid.x, c.mid.z, 17, _cars), c.mid)) {
             n.state = 'cross';
             n.stateTime = 0;
@@ -174,8 +174,8 @@ export class NpcManager {
         }
         default: {
           // 'walk' or 'cross': head for the next waypoint.
-          const tx = coord(n.to[0], n.inset), tz = coord(n.to[1], n.inset);
-          _move.set(tx - p.position.x, tz - p.position.y);
+          const t = waypoint(n.to, n.inset);
+          _move.set(t.x - p.position.x, t.z - p.position.y);
           const d = _move.length();
           if (d < ARRIVE) {
             this.#chooseNext(n, true);
@@ -293,22 +293,23 @@ export class NpcManager {
     if (arrived) (n.prev = n.from), (n.from = n.to);
     const at = n.from;
     const allowCrossing = arrived;
-    let options = neighbours(at[0], at[1]).filter((o) => !(n.prev && o[0] === n.prev[0] && o[1] === n.prev[1]));
-    if (!allowCrossing) options = options.filter((o) => !crossingOf(at, o));
-    if (options.length === 0) options = neighbours(at[0], at[1]).filter((o) => !crossingOf(at, o));
+    const links = WALK.nodes[at].links;
+    let options = links.filter((l) => l.to !== n.prev);
+    if (!allowCrossing) options = options.filter((l) => !l.crossing);
+    if (options.length === 0) options = links.filter((l) => !l.crossing);
+    if (options.length === 0) options = links;
     // Weighted pick: crossing the street is a bit less likely than carrying on round the block.
-    const weights = options.map((o) => (crossingOf(at, o) ? 0.6 : 1));
+    const weights = options.map((l) => (l.crossing ? 0.6 : 1));
     let r = this.rng.next() * weights.reduce((a, b) => a + b, 0);
     let pick = options[0];
     for (let k = 0; k < options.length; k++) if ((r -= weights[k]) <= 0) (pick = options[k]), (k = options.length);
 
-    n.to = pick;
+    n.to = pick.to;
     n.stateTime = 0;
     n.stuck = 0;
-    const c = crossingOf(at, pick);
-    if (c) {
-      c.dir = new THREE.Vector2(pick[0] - at[0], pick[1] - at[1]);
-      n.crossing = c;
+    if (pick.crossing) {
+      const a = WALK.nodes[at], b = WALK.nodes[pick.to];
+      n.crossing = { ...pick.crossing, dir: new THREE.Vector2(b.x - a.x, b.z - a.z).normalize() };
       n.state = 'wait';
     } else {
       n.crossing = null;
@@ -319,7 +320,7 @@ export class NpcManager {
   /** Lost our place (after fleeing etc.): head to the nearest sidewalk corner and carry on. */
   #resnap(n) {
     const p = n.ped;
-    n.to = [nearestIndex(p.position.x, n.inset), nearestIndex(p.position.y, n.inset)];
+    n.to = nearestWaypoint(p.position.x, p.position.y);
     n.from = null;
     n.prev = null;
     n.crossing = null;
@@ -382,26 +383,27 @@ export class NpcManager {
   /** Place a walker somewhere along a block's sidewalk, `minD`..`maxD` from the focus. */
   #trySpawn(focus, minD, maxD, tries) {
     // Only sidewalks that can reach the spawn ring around the focus.
-    const rx = indexRange(focus.x, maxD);
-    const rz = indexRange(focus.z, maxD);
+    const near = waypointsNear(focus.x, focus.z, maxD);
+    if (!near.length) return false;
     for (let t = 0; t < tries; t++) {
-      const ix = this.rng.int(rx[0], rx[1]);
-      const iz = this.rng.int(rz[0], rz[1]);
-      // Walk along this side of the block: partner corner on the same block is index ^ 1.
-      const to = this.rng.chance(0.5) ? [ix ^ 1, iz] : [ix, iz ^ 1];
-      if (!isValid(...to)) continue;
+      const from = this.rng.pick(near);
+      // Walk along this side of the block (not across a road).
+      const side = WALK.nodes[from].links.filter((l) => !l.crossing);
+      if (!side.length) continue;
+      const to = this.rng.pick(side).to;
       const inset = this.rng.range(1.8, 2.4);
       const f = this.rng.next();
-      const x = coord(ix, inset) + (coord(to[0], inset) - coord(ix, inset)) * f;
-      const z = coord(iz, inset) + (coord(to[1], inset) - coord(iz, inset)) * f;
+      const a = waypoint(from, inset), b = waypoint(to, inset);
+      const x = a.x + (b.x - a.x) * f;
+      const z = a.z + (b.z - a.z) * f;
       const dist = Math.hypot(x - focus.x, z - focus.z);
       if (dist < minD || dist > maxD) continue;
       if (this.npcs.some((o) => o.active && o.ped.position.distanceToSquared(_v.set(x, z)) < 4)) continue;
 
       const n = this.#acquire(rollPerson(this.rng, x, z));
       n.inset = inset;
-      n.ped.reset(x, z, Math.atan2(to[0] - ix, to[1] - iz));
-      n.from = [ix, iz];
+      n.ped.reset(x, z, Math.atan2(b.x - a.x, b.z - a.z));
+      n.from = from;
       n.to = to;
       return true;
     }

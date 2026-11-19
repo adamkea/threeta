@@ -1,7 +1,6 @@
 import * as THREE from 'three';
 import { Car } from '../vehicles/Car.js';
-import { CITY } from '../world/City.js';
-import { DIRS, HALF_ROAD, LANE_OFFSET, headingOf, isValidNode, nodeRange, nodeX, rightOf } from '../traffic/RoadNetwork.js';
+import { headingOf, randomLaneSpot } from '../traffic/RoadNetwork.js';
 import { PursuitDriver } from './PursuitDriver.js';
 import { clearLine } from './sight.js';
 import { WEAPONS, Weapon } from '../combat/weapons.js';
@@ -318,18 +317,10 @@ export class PoliceSystem {
     const tp = target.position;
     const v = target.velocity;
     const moving = v.length() > 8;
-    const ri = nodeRange(tp.x, SPAWN_MAX);
-    const rj = nodeRange(tp.y, SPAWN_MAX);
-    if (!ri || !rj) return false;
     for (let t = 0; t < 10; t++) {
-      const i = this.rng.int(ri[0], ri[1]);
-      const j = this.rng.int(rj[0], rj[1]);
-      const d = this.rng.pick(DIRS);
-      if (!isValidNode(i + d[0], j + d[1])) continue;
-      const r = rightOf(d);
-      const s = HALF_ROAD + 6 + this.rng.range(0, CITY.blockSize - 14);
-      const x = nodeX(i) + d[0] * s + r[0] * LANE_OFFSET;
-      const z = nodeX(j) + d[1] * s + r[1] * LANE_OFFSET;
+      const spot = randomLaneSpot(this.rng, tp.x, tp.y, SPAWN_MAX);
+      if (!spot) continue;
+      const { x, z, d } = spot;
       const dist = Math.hypot(x - tp.x, z - tp.y);
       if (dist < SPAWN_MIN || dist > SPAWN_MAX) continue;
       if ((tp.x - x) * d[0] + (tp.y - z) * d[1] < 0) continue; // face the player's way

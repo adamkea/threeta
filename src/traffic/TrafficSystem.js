@@ -1,7 +1,6 @@
 import { Car } from '../vehicles/Car.js';
 import { randomModel } from '../vehicles/carModels.js';
-import { CITY } from '../world/City.js';
-import { DIRS, HALF_ROAD, LANE_OFFSET, headingOf, isValidNode, nodeRange, nodeX, rightOf } from './RoadNetwork.js';
+import { headingOf, randomLaneSpot } from './RoadNetwork.js';
 import { TrafficDriver } from './TrafficDriver.js';
 
 
@@ -82,19 +81,11 @@ export class TrafficSystem {
   }
 
   #trySpawn(car, focus, minD, maxD, others, tries) {
-    // Only roads that can reach the spawn ring around the focus.
-    const ri = nodeRange(focus.x, maxD);
-    const rj = nodeRange(focus.z, maxD);
-    if (!ri || !rj) return false;
     for (let t = 0; t < tries; t++) {
-      const i = this.rng.int(ri[0], ri[1]);
-      const j = this.rng.int(rj[0], rj[1]);
-      const d = this.rng.pick(DIRS);
-      if (!isValidNode(i + d[0], j + d[1])) continue;
-      const r = rightOf(d);
-      const s = HALF_ROAD + 6 + this.rng.range(0, CITY.blockSize - 14);
-      const x = nodeX(i) + d[0] * s + r[0] * LANE_OFFSET;
-      const z = nodeX(j) + d[1] * s + r[1] * LANE_OFFSET;
+      // Only roads that can reach the spawn ring around the focus.
+      const spot = randomLaneSpot(this.rng, focus.x, focus.z, maxD);
+      if (!spot) continue;
+      const { x, z, d, h } = spot;
       const dist = Math.hypot(x - focus.x, z - focus.z);
       if (dist < minD || dist > maxD) continue;
       if (others.some((o) => o !== car && o.active && Math.hypot(o.position.x - x, o.position.y - z) < 10)) continue;
@@ -104,7 +95,7 @@ export class TrafficSystem {
       car.reset(x, z, headingOf(d), 9);
       car.active = true;
       car.mesh.visible = true;
-      const driver = new TrafficDriver(car, this.rng, [i, j], d, x, z);
+      const driver = new TrafficDriver(car, this.rng, h, x, z);
       this.drivers.set(car, driver);
       car.ai = driver; // lets other drivers read this car's intentions
       return true;

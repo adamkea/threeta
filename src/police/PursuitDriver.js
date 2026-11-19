@@ -1,13 +1,47 @@
-import { CITY } from '../world/City.js';
-import { DIRS, isValidNode, nodeX } from '../traffic/RoadNetwork.js';
+import { GRAPH } from '../traffic/RoadNetwork.js';
 import { clearLine } from './sight.js';
 
 const DIRECT_RANGE = 35; // closer than this with a clear view: drive straight at the target
 const CORNER_SPEED = 10; // m/s through a turn at a junction
 const BRAKE = 14; // m/s² used to plan slowing for corners
 
-/** Index of the road line nearest to a coordinate. */
-const nearestLine = (v) => Math.max(0, Math.min(CITY.blocks, Math.round((v - nodeX(0)) / CITY.cell)));
+/**
+ * Road distance from every junction to a target point: Dijkstra over the road graph, seeded
+ * from both ends of the road nearest the target.
+ */
+function distancesTo(x, z) {
+  const g = GRAPH;
+  const dist = new Float64Array(g.nodes.length).fill(Infinity);
+  const near = g.nearestLane(x, z, 0, 0, -2, 60);
+  const seeds = near
+    ? [g.from(near.h), g.to(near.h)]
+    : [g.nodes.reduce((b, n) => (Math.hypot(n.x - x, n.z - z) < Math.hypot(b.x - x, b.z - z) ? n : b)).id];
+  const open = [];
+  for (const id of seeds) {
+    dist[id] = Math.hypot(g.nodes[id].x - x, g.nodes[id].z - z);
+    open.push(id);
+  }
+  // The graph is small (~100 junctions): a linear scan for the closest open node is plenty.
+  const done = new Uint8Array(g.nodes.length);
+  while (open.length) {
+    let k = 0;
+    for (let i = 1; i < open.length; i++) if (dist[open[i]] < dist[open[k]]) k = i;
+    const n = open.splice(k, 1)[0];
+    if (done[n]) continue;
+    done[n] = 1;
+    for (const h of g.nodes[n].out) {
+      const m = g.to(h);
+      const d = dist[n] + g.edge(h).len;
+      if (d < dist[m]) {
+        dist[m] = d;
+        open.push(m);
+      }
+    }
+  }
+  return dist;
+}
+
+const nodePos = (id) => GRAPH.nodes[id];
 
 /**
  * Police driver: navigates the road grid junction by junction toward the target, then drives
@@ -16,7 +50,7 @@ const nearestLine = (v) => Math.max(0, Math.min(CITY.blocks, Math.round((v - nod
 export class PursuitDriver {
   constructor(car) {
     this.car = car;
-    this.node = null; // [i, j] junction we're heading for
+    this.node = null; // junction (node id) we're heading for
     this.prev = null; // junction we came from (to avoid U-turns)
     this.direct = false;
     this.stuckTime = 0;
@@ -47,22 +81,21 @@ export class PursuitDriver {
       az = tp.y + target.velocity.y * lead;
       this.node = null;
     } else {
-      if (!this.node) this.#plan(tp);
-      let nx = nodeX(this.node[0]), nz = nodeX(this.node[1]);
+      if (this.node === null) this.#plan(tp);
+      let { x: nx, z: nz } = nodePos(this.node);
       // Switch to the next junction a bit early so we carve the corner.
       if (Math.hypot(nx - pos.x, nz - pos.y) < Math.max(6, Math.abs(vF) * 0.45)) {
         this.#advance(tp);
-        nx = nodeX(this.node[0]);
-        nz = nodeX(this.node[1]);
+        ({ x: nx, z: nz } = nodePos(this.node));
       }
       ax = nx;
       az = nz;
       // Slow down for the junction if the following leg turns.
       const next = this.#bestNext(this.node, this.prev, tp, true);
-      if (next && this.prev) {
-        const inX = this.node[0] - this.prev[0], inZ = this.node[1] - this.prev[1];
-        const outX = next[0] - this.node[0], outZ = next[1] - this.node[1];
-        if (inX * outX + inZ * outZ < 1) {
+      if (next !== null && this.prev !== null) {
+        const P = nodePos(this.prev), C = nodePos(this.node), X = nodePos(next);
+        const inX = C.x - P.x, inZ = C.z - P.z, outX = X.x - C.x, outZ = X.z - C.z;
+        if (inX * outX + inZ * outZ < 0.95 * Math.hypot(inX, inZ) * Math.hypot(outX, outZ)) {
           const d = Math.hypot(nx - pos.x, nz - pos.y);
           cornerLimit = Math.sqrt(CORNER_SPEED ** 2 + 2 * BRAKE * Math.max(0, d - 8));
         }
@@ -119,48 +152,55 @@ export class PursuitDriver {
     return { throttle, steer, handbrake };
   }
 
-  /** Choose the first junction to head for: close by, roughly ahead, and toward the target. */
+  /** Choose the first junction to head for: an end of the road we're on, roughly ahead and toward the target. */
   #plan(tp) {
+    const g = GRAPH;
     const pos = this.car.position;
     const fwd = this.car.forward;
-    const ci = nearestLine(pos.x), cj = nearestLine(pos.y);
+    this.dist = distancesTo(tp.x, tp.y);
+    this.distAge = 0;
+    const near = g.nearestLane(pos.x, pos.y, 0, 0, -2, 40);
     let best = null;
-    for (let i = ci - 1; i <= ci + 1; i++) {
-      for (let j = cj - 1; j <= cj + 1; j++) {
-        if (!isValidNode(i, j)) continue;
-        const nx = nodeX(i), nz = nodeX(j);
-        // Only junctions reachable along a road: on the same road line as us (or the one we're in).
-        const onRoadX = Math.abs(pos.y - nz) < CITY.roadWidth / 2 + 1;
-        const onRoadZ = Math.abs(pos.x - nx) < CITY.roadWidth / 2 + 1;
-        if (!onRoadX && !onRoadZ) continue;
-        const behind = (nx - pos.x) * fwd.x + (nz - pos.y) * fwd.y < -2;
-        const score =
-          Math.hypot(nx - pos.x, nz - pos.y) + Math.abs(nx - tp.x) + Math.abs(nz - tp.y) + (behind ? 30 : 0);
-        if (!best || score < best.score) best = { score, node: [i, j] };
-      }
+    const ends = near ? [g.from(near.h), g.to(near.h)] : [];
+    for (const id of ends) {
+      const n = g.nodes[id];
+      const behind = (n.x - pos.x) * fwd.x + (n.z - pos.y) * fwd.y < -2;
+      const score = Math.hypot(n.x - pos.x, n.z - pos.y) + this.dist[id] + (behind ? 30 : 0);
+      if (!best || score < best.score) best = { score, id };
     }
-    // Off the road grid entirely (e.g. in a park): just head for the nearest junction.
-    this.node = best ? best.node : [ci, cj];
+    // Off the roads entirely (e.g. in a park): just head for the nearest junction.
+    this.node = best ? best.id : g.nodes.reduce((b, n) => (Math.hypot(n.x - pos.x, n.z - pos.y) < Math.hypot(b.x - pos.x, b.z - pos.y) ? n : b)).id;
     this.prev = null;
   }
 
   #advance(tp) {
+    // The target moves: refresh the road distances to it every few junctions.
+    if (++this.distAge > 2 || !this.dist) {
+      this.dist = distancesTo(tp.x, tp.y);
+      this.distAge = 0;
+    }
     const next = this.#bestNext(this.node, this.prev, tp, false);
     this.prev = this.node;
     this.node = next ?? this.prev;
   }
 
-  /** Neighbouring junction that gets us closest to the target, avoiding U-turns. */
+  /** Neighbouring junction on the shortest road route to the target, avoiding U-turns. */
   #bestNext(node, prev, tp, peek) {
-    if (!node) return null;
+    if (node === null) return null;
+    const g = GRAPH;
+    const C = g.nodes[node];
+    const P = prev !== null ? g.nodes[prev] : null;
     let best = null;
-    for (const d of DIRS) {
-      const n = [node[0] + d[0], node[1] + d[1]];
-      if (!isValidNode(n[0], n[1])) continue;
-      const uTurn = prev && n[0] === prev[0] && n[1] === prev[1];
-      const straight = prev && n[0] - node[0] === node[0] - prev[0] && n[1] - node[1] === node[1] - prev[1];
-      const score =
-        Math.abs(nodeX(n[0]) - tp.x) + Math.abs(nodeX(n[1]) - tp.y) + (uTurn ? CITY.cell * 1.5 : 0) - (straight ? 4 : 0);
+    for (const h of C.out) {
+      const n = g.to(h);
+      const N = g.nodes[n];
+      const uTurn = n === prev;
+      let straight = false;
+      if (P) {
+        const ix = C.x - P.x, iz = C.z - P.z, ox = N.x - C.x, oz = N.z - C.z;
+        straight = ix * ox + iz * oz > 0.95 * Math.hypot(ix, iz) * Math.hypot(ox, oz);
+      }
+      const score = g.edge(h).len + this.dist[n] + (uTurn ? 120 : 0) - (straight ? 4 : 0);
       if (!best || score < best.score) best = { score, n };
     }
     return best?.n ?? (peek ? null : node);
