@@ -51,6 +51,25 @@ export const MODELS = {
     tail: 0.92,
     paints: [0xa8aeb6, 0xf4f4f0, 0x3a3e45, 0x2f5fa8, 0xc62a2a, 0x17181c],
   },
+  // Classic 1960s Italian grand tourer: very long hood, small cabin set well back with a fastback
+  // tail, low tapered nose with an oval egg-crate grille, round headlamps in the wings, chrome
+  // blade bumpers and wire wheels. Rare in traffic, and far faster than anything else on the road.
+  classic: {
+    cfg: { length: 4.6, width: 1.95, maxSpeed: 58, engineAccel: 32, grip: 10 },
+    cabin: { rear: -0.45, roofRear: -0.29, roofFront: -0.12, front: -0.01, top: 0.9, width: 0.72 },
+    bodyH: 0.5,
+    nose: 0.62,
+    tail: 0.8,
+    wheelR: 0.37,
+    wheelZ: 0.32,
+    roundLamps: true,
+    ovalGrille: true,
+    chromeBumpers: true,
+    sideVents: true,
+    wireWheels: true,
+    paints: [0xc8102e, 0xc8102e, 0xc8102e, 0xb0141c, 0xffc414, 0xe8e4d8, 0x1f3d2b],
+    stripeChance: 0.12,
+  },
   van: {
     cfg: { length: 5.0, width: 2.2, maxSpeed: 28, engineAccel: 15 },
     cabin: { rear: -0.49, roofRear: -0.49, roofFront: 0.2, front: 0.3, top: 2.05, width: 0.94 },
@@ -98,6 +117,7 @@ const TRAFFIC_MIX = [
   ['sports', 8],
   ['golf', 10],
   ['police', 4],
+  ['classic', 1], // under 1% of traffic: a lucky find
 ];
 export function randomModel(rng) {
   let r = rng.range(0, TRAFFIC_MIX.reduce((s, [, w]) => s + w, 0));
@@ -336,18 +356,60 @@ export function buildCarMesh(name, color) {
 
   // --- Front & rear details ---
   const bumperY = 0.14;
-  add(g.bumper, S.dark, 0, bumperY, L / 2 - 0.05);
-  add(g.bumper, S.dark, 0, bumperY, -L / 2 + 0.05);
   const lampY = T - 0.2;
   const lampX = W / 2 - 0.42;
-  const frontFace = add(plane(lampX * 2 - 0.55, 0.16), S.grille, 0, lampY - 0.02, L / 2 + 0.01, body, false); // grille
-  frontFace.renderOrder = 0;
+  if (m.chromeBumpers) {
+    // Slim chrome blades split either side of the grille at the front, full width at the back.
+    for (const s of [-1, 1]) {
+      const blade = add(new RoundedBoxGeometry(0.42, 0.07, 0.12, 2, 0.03), S.chrome, s * 0.4, bumperY + 0.14, L / 2 - 0.06);
+      blade.rotation.y = s * -0.35;
+    }
+    add(new RoundedBoxGeometry(W * 0.8, 0.07, 0.12, 2, 0.03), S.chrome, 0, bumperY + 0.18, -L / 2 + 0.06);
+  } else {
+    add(g.bumper, S.dark, 0, bumperY, L / 2 - 0.05);
+    add(g.bumper, S.dark, 0, bumperY, -L / 2 + 0.05);
+  }
+  if (!m.ovalGrille) {
+    const frontFace = add(plane(lampX * 2 - 0.55, 0.16), S.grille, 0, lampY - 0.02, L / 2 + 0.01, body, false); // grille
+    frontFace.renderOrder = 0;
+  }
   add(plane(0.5, 0.12), S.plate, 0, bumperY + 0.02, L / 2 + 0.11, body, false); // number plates
   add(plane(0.5, 0.12), S.plate, 0, bumperY + 0.02, -L / 2 - 0.11, body, false).rotation.y = Math.PI;
-  for (const s of [-1, 1]) {
-    add(g.lamp, S.head, s * lampX, lampY, L / 2 - 0.02);
-    add(g.lamp, tailMat, s * lampX, lampY, -L / 2 + 0.02);
-    add(new THREE.BoxGeometry(0.12, 0.08, 0.05), S.indicator, s * (W / 2 - 0.16), lampY, L / 2 - 0.12, body, false);
+  if (m.roundLamps) {
+    // Round headlamps in chrome bezels, set back into the tapering wings; twin round tail lamps.
+    const disc = (r) => new THREE.CylinderGeometry(r, r, 0.08, 18).rotateX(Math.PI / 2);
+    const headZ = L / 2 - 0.45;
+    for (const s of [-1, 1]) {
+      const hx = s * (W / 2 - 0.47);
+      add(disc(0.16), S.chrome, hx, T - 0.05, headZ);
+      add(disc(0.13), S.head, hx, T - 0.05, headZ + 0.04);
+      for (const k of [0, 1]) add(disc(0.075), tailMat, s * (lampX - 0.06 + k * 0.2), lampY + 0.04, -L / 2 + 0.06 - k * 0.04).rotation.y = s * 0.25 * k;
+      add(new THREE.BoxGeometry(0.1, 0.06, 0.05), S.indicator, s * 0.42, bumperY + 0.08, L / 2 - 0.13, body, false);
+    }
+  } else {
+    for (const s of [-1, 1]) {
+      add(g.lamp, S.head, s * lampX, lampY, L / 2 - 0.02);
+      add(g.lamp, tailMat, s * lampX, lampY, -L / 2 + 0.02);
+      add(new THREE.BoxGeometry(0.12, 0.08, 0.05), S.indicator, s * (W / 2 - 0.16), lampY, L / 2 - 0.12, body, false);
+    }
+  }
+  if (m.ovalGrille) {
+    // Low oval mouth in the nose: chrome surround, dark egg-crate mesh, a small badge on the hood.
+    const oval = (rx, ry) => new THREE.CircleGeometry(1, 28).scale(rx, ry, 1);
+    add(oval(0.36, 0.15), S.chrome, 0, bumperY + 0.2, L / 2 - 0.005, body, false);
+    add(oval(0.32, 0.12), S.grille, 0, bumperY + 0.2, L / 2 + 0.002, body, false);
+    for (const gx of [-0.16, 0, 0.16]) add(plane(0.015, 0.2), S.rim, gx, bumperY + 0.2, L / 2 + 0.006, body, false);
+    add(plane(0.6, 0.015), S.rim, 0, bumperY + 0.2, L / 2 + 0.006, body, false);
+    add(new THREE.CylinderGeometry(0.05, 0.05, 0.02, 12), S.indicator, 0, T + 0.005, L / 2 - 0.3);
+  }
+  if (m.sideVents) {
+    // Three gill vents on each front wing, just behind the front wheel arch.
+    const vz = (m.wheelZ ?? 0.3) * L - 0.65;
+    for (const s of [-1, 1])
+      for (let k = 0; k < 3; k++) {
+        const v = add(plane(0.36, 0.035), S.grille, s * (W / 2 - 0.035), T - 0.22 + k * 0.08, vz, body, false);
+        v.rotation.y = s * Math.PI / 2;
+      }
   }
 
   // --- Racing stripes (decals over hood / roof / trunk) ---
@@ -417,7 +479,12 @@ export function buildCarMesh(name, color) {
     pivot.add(spin);
     const tyre = new THREE.Mesh(g.tyre, S.tyre);
     tyre.castShadow = true;
-    spin.add(tyre, new THREE.Mesh(g.rim, S.rim), new THREE.Mesh(g.hubcap, S.chrome), new THREE.Mesh(g.spoke, S.rim));
+    const rimMat = m.wireWheels ? S.chrome : S.rim;
+    spin.add(tyre, new THREE.Mesh(g.rim, rimMat), new THREE.Mesh(g.hubcap, m.wireWheels ? S.indicator : S.chrome), new THREE.Mesh(g.spoke, rimMat));
+    if (m.wireWheels) {
+      // Extra spokes so the chrome rim reads as a wire wheel.
+      for (const a of [Math.PI / 4, Math.PI / 2, (3 * Math.PI) / 4]) spin.add(new THREE.Mesh(g.spoke, S.dark).rotateX(a));
+    }
     root.add(pivot);
     wheels.push({ pivot, spin, front });
   }
