@@ -45,7 +45,13 @@ export class TrafficSystem {
 
   /** Fill the city immediately (used at start, so traffic isn't only off-screen). */
   populate(focus, avoid) {
-    for (const car of this.cars) this.#trySpawn(car, focus, 15, this.spawnMax, avoid, 30);
+    for (const car of this.cars) if (!car.active) this.#trySpawn(car, focus, 15, this.spawnMax, avoid, 30);
+  }
+
+  /** After the player is moved across the city: retire cars left far behind and fill in the new area. */
+  repopulate(focus, allCars) {
+    this.manage(focus, allCars);
+    this.populate(focus, allCars);
   }
 
   /** Run AI and physics for one fixed step. */

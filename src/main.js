@@ -181,6 +181,8 @@ function resetPlayer() {
 // While being arrested (or dead) the player has no control.
 const NO_INPUT = { throttle: 0, steer: 0, move: { x: 0, y: 0 }, isDown: () => false, wasPressed: () => false };
 let bustedTimer = 0; // > 0 while the BUSTED / FLATLINED sequence plays
+let respawnAt = null; // where the player comes back once it ends: the police station or the hospital
+const landmark = (kind) => city.landmarks.find((l) => l.kind === kind);
 let bannerTimer = 0;
 const policeCtx = { player, wanted, world };
 
@@ -205,25 +207,39 @@ function showBanner(text, kind, time = 2.5) {
   bannerTimer = time;
 }
 
-/** Arrested or killed: lose the car, start again back at the start with full health and a clean slate. */
+/**
+ * Arrested or killed: lose the car and walk out of the police station (busted) or the hospital
+ * (dead) with full health and a clean slate.
+ */
 function finishArrest() {
+  const { x, z, heading } = respawnAt.respawn;
   player.forceExit(world);
   player.ped.revive();
-  player.ped.reset(SPAWN.x - 9, SPAWN.z);
+  player.ped.reset(x, z, heading);
   wanted.clear();
   police.standDown();
+  // Cut straight to the new spot, and bring the streets around it to life.
+  rig.initialised = false;
+  const focus = { x, z };
+  traffic.repopulate(focus, allCars());
+  npcs.repopulate(focus);
+  parked.manage(focus, allCars(), disposeObject, 0);
+  showBanner(respawnAt.name.toUpperCase(), 'escaped', 2);
 }
 
 function updateWanted(dt) {
   const hadStars = wanted.stars;
   if (bustedTimer === 0 && player.inVehicle && player.vehicle.submerged) {
     bustedTimer = 4; // went into the sea with the car
+    respawnAt = landmark('hospital');
     showBanner('DROWNED', 'dead', 4);
   } else if (bustedTimer === 0 && !player.inVehicle && player.ped.dead) {
     bustedTimer = 4;
+    respawnAt = landmark('hospital');
     showBanner(player.ped.overboard ? 'DROWNED' : 'FLATLINED', 'dead', 4);
   } else if (police.busted && bustedTimer === 0) {
     bustedTimer = 3;
+    respawnAt = landmark('police');
     showBanner('BUSTED', 'busted', 3);
   }
   if (bustedTimer > 0) {
@@ -270,7 +286,7 @@ function updateCombatHud(dt) {
 
 // Dev-only hook for debugging / automated tests.
 if (import.meta.env.DEV) {
-  window.__game = { parked, skids, player, traffic, npcs, lights, world, allCars, allPeds, step, input, wanted, police, combat, STEP: 1 / 120 };
+  window.__game = { parked, skids, player, traffic, npcs, lights, world, allCars, allPeds, step, input, wanted, police, combat, rig, city, STEP: 1 / 120 };
 }
 
 // --- Main loop: fixed-step physics, variable-rate rendering ---

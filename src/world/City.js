@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { createRng } from '../core/random.js';
 import { toon } from '../render/toon.js';
+import { LANDMARK_BLOCKS, createLandmark } from './Landmarks.js';
 
 // City layout constants (metres). The city is a square grid of blocks separated by roads.
 export const CITY = {
@@ -110,6 +111,8 @@ export function createCity(seed = 1337) {
   const lotRng = createRng(seed + 7);
   lotBlocks.clear();
   const buildings = []; // footprints + colours, for the map
+  const landmarks = []; // police station, hospital…
+  const windowTex = createWindowTexture();
 
   for (let bx = 0; bx < CITY.blocks; bx++) {
     for (let bz = 0; bz < CITY.blocks; bz++) {
@@ -124,6 +127,22 @@ export function createCity(seed = 1337) {
       const park = rng.chance(0.1);
       // One lot is always right beside the player's starting point; others are scattered about.
       const lot = !park && ((bx === 4 && bz === 4) || lotRng.chance(0.09));
+      const landmark = LANDMARK_BLOCKS.find((l) => l.bx === bx && l.bz === bz);
+      if (landmark) {
+        sidewalkMatrices.push(
+          new THREE.Matrix4().makeTranslation(x0 + CITY.blockSize / 2, CITY.curbHeight / 2, z0 + CITY.blockSize / 2),
+        );
+        const l = createLandmark(landmark.kind, x0 + CITY.blockSize / 2, z0 + CITY.blockSize / 2, CITY.curbHeight, {
+          colliders,
+          windowTex,
+        });
+        group.add(l.group);
+        landmarks.push(l);
+        buildings.push({ ...l.footprint, color: l.color });
+        // Build (and throw away) the block that would have stood here, so the rest of the city keeps its layout.
+        if (!park && !lot) buildBlock(rng, x0, z0, downtown, new QuadBuilder(), new QuadBuilder(), [], []);
+        continue;
+      }
       if (lot) {
         lots.push({ x0, z0 });
         lotBlocks.add(bx * 100 + bz);
@@ -153,7 +172,7 @@ export function createCity(seed = 1337) {
 
   const wallMesh = new THREE.Mesh(
     walls.build(),
-    toon({ map: createWindowTexture(), vertexColors: true }),
+    toon({ map: windowTex, vertexColors: true }),
   );
   wallMesh.castShadow = wallMesh.receiveShadow = true;
   group.add(wallMesh);
@@ -167,8 +186,7 @@ export function createCity(seed = 1337) {
   group.add(parking.group);
   group.add(createStreetLamps(colliders));
 
-
-  return { group, colliders, buildings, parks, lots, parkingSpots: parking.spots };
+  return { group, colliders, buildings, parks, lots, landmarks, parkingSpots: parking.spots };
 }
 
 /**
