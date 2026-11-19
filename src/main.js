@@ -21,6 +21,8 @@ import { weaponIcon } from './ui/weaponIcons.js';
 import { CombatSystem } from './combat/CombatSystem.js';
 import { ParkedCars } from './vehicles/ParkedCars.js';
 import { VehicleDamageSystem } from './vehicles/VehicleDamageSystem.js';
+import { DevConsole } from './ui/DevConsole.js';
+import { PerfStats } from './ui/PerfStats.js';
 
 const canvas = document.getElementById('game');
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: false }); // AA is handled in InkRenderer (MSAA colour + SMAA)
@@ -316,9 +318,58 @@ function updateCombatHud(dt) {
   canvas.style.cursor = player.armed && bustedTimer === 0 ? 'crosshair' : '';
 }
 
+// --- Dev console (` to toggle) ---
+const devConsole = new DevConsole({ onOpen: () => input.releaseAll() });
+
+/** Set the wanted level from the console, standing the police down when it hits zero. */
+function setWanted(stars) {
+  const had = wanted.stars;
+  wanted.setStars(stars);
+  if (had && !wanted.stars) police.standDown();
+}
+
+const wantedStatus = () =>
+  `Wanted: ${wanted.stars} star${wanted.stars === 1 ? '' : 's'}${wanted.suppressed ? ' (wanted level disabled)' : ''}`;
+
+devConsole.register('wanted', 'wanted [clear | up [n] | down [n] | 0-5 | off | on] — show / change the wanted level', ([sub, n]) => {
+  const count = n === undefined ? 1 : Number(n);
+  if (n !== undefined && !Number.isFinite(count)) throw new Error(`Not a number: "${n}"`);
+  if (sub === 'off' || sub === 'on') {
+    wanted.suppressed = sub === 'off';
+    if (wanted.suppressed) setWanted(0);
+    return wanted.suppressed ? 'Wanted level disabled — crimes are ignored.' : 'Wanted level enabled.';
+  }
+  if (sub !== undefined && sub !== 'clear' && wanted.suppressed) {
+    throw new Error('Wanted level is disabled — run "wanted on" first.');
+  }
+  if (sub === undefined) return wantedStatus();
+  if (sub === 'clear') setWanted(0);
+  else if (sub === 'up') setWanted(wanted.stars + count);
+  else if (sub === 'down') setWanted(wanted.stars - count);
+  else if (/^[0-5]$/.test(sub)) setWanted(Number(sub));
+  else throw new Error(`Unknown option "${sub}". Try: clear, up, down, 0-5, off, on.`);
+  return wantedStatus();
+});
+
+// Performance overlay: shown while the console is open, or pinned with `stats on`.
+const perf = new PerfStats(renderer, () => {
+  const cars = allCars();
+  return {
+    cars: `${cars.filter((c) => c.active).length} / ${cars.length}`,
+    peds: allPeds().length,
+    police: police.units.length,
+  };
+});
+let perfPinned = false;
+devConsole.register('stats', 'stats [on | off] — keep the performance overlay up with the console closed', ([sub]) => {
+  if (sub !== 'on' && sub !== 'off') throw new Error('Usage: stats on | off');
+  perfPinned = sub === 'on';
+  return perfPinned ? 'Performance overlay pinned.' : 'Performance overlay shows only while the console is open.';
+});
+
 // Dev-only hook for debugging / automated tests.
 if (import.meta.env.DEV) {
-  window.__game = { parked, skids, player, traffic, npcs, lights, world, allCars, allPeds, step, input, wanted, police, combat, damage, rig, city, STEP: 1 / 120 };
+  window.__game = { parked, skids, player, traffic, npcs, lights, world, allCars, allPeds, step, input, wanted, police, combat, damage, rig, city, devConsole, STEP: 1 / 120 };
 }
 
 // --- Main loop: fixed-step physics, variable-rate rendering ---
@@ -329,6 +380,8 @@ let last = performance.now();
 function frame(now) {
   const dt = Math.min(0.1, (now - last) / 1000);
   last = now;
+  perf.setVisible(perfPinned || devConsole.isOpen);
+  perf.beginFrame(dt);
 
   if (bustedTimer === 0) {
     if (input.wasPressed('reset')) resetPlayer();
@@ -340,10 +393,13 @@ function frame(now) {
   if (input.wasPressed('map')) cityMap.toggle();
 
   acc += dt;
-  while (acc >= STEP) {
-    step(STEP);
-    acc -= STEP;
-  }
+  perf.measure('sim', () => {
+    while (acc >= STEP) {
+      step(STEP);
+      acc -= STEP;
+      perf.addSteps(1);
+    }
+  });
 
   // --- Per-frame bookkeeping & visuals ---
   lights.update(dt);
@@ -374,7 +430,7 @@ function frame(now) {
   promptEl.textContent = player.inVehicle || bustedTimer > 0 ? '' : canEnter ? (occupied ? 'F — hijack car' : 'F — get in') : '';
   updateCombatHud(dt);
 
-  ink.render(scene, camera);
+  perf.measureRender(() => ink.render(scene, camera));
   cityMap.render(dt, {
     player: player.body,
     inVehicle: player.inVehicle,
@@ -383,6 +439,7 @@ function frame(now) {
     cops: npcs.peds.filter((p) => p.role === 'cop' && !p.isDown),
   });
   input.endFrame();
+  perf.endFrame();
   requestAnimationFrame(frame);
 }
 requestAnimationFrame(frame);
