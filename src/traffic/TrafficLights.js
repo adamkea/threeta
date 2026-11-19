@@ -32,6 +32,13 @@ export class TrafficLights {
     return 'red';
   }
 
+  /** Seconds of green left for traffic along `axis` at node (i, j); 0 if not green. */
+  greenRemaining(i, j, axis) {
+    let t = (this.time + this.offsets[i * this.n + j]) % CYCLE;
+    if (axis === 'x') t = (t + CYCLE / 2) % CYCLE;
+    return t < GREEN ? GREEN - t : 0;
+  }
+
   update(dt) {
     this.time += dt;
     this.heads.forEach(({ i, j, axis }, k) => this.mesh.setColorAt(k, COLORS[this.state(i, j, axis)]));
