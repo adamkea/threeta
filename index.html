@@ -2,7 +2,10 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <title>Threeta</title>
     <link rel="stylesheet" href="/src/style.css" />
   </head>
@@ -30,11 +33,11 @@
           <h2>Lock &amp; Load</h2>
           <ul class="items"></ul>
           <div class="foot"><span class="cash"></span><span class="msg"></span></div>
-          <div class="hint"><b>W/S</b> choose &nbsp; <b>F</b> buy &nbsp; <b>Esc</b> done</div>
+          <div class="hint"><span class="keys-only"><b>W/S</b> choose &nbsp; <b>F</b> buy &nbsp; <b>Esc</b> done</span><span class="touch-only">Tap an item to buy it</span></div>
         </div>
       </div>
       <div id="fade"></div>
-      <div id="map"><div class="frame"><canvas></canvas><div class="legend"><span class="you">You</span><span class="cop">Police</span><span class="car">Cars</span><span class="station">Police station</span><span class="hospital">Hospital</span><span class="gunshop">Gun shop</span><span class="hint">M to close</span></div></div></div>
+      <div id="map"><div class="frame"><canvas></canvas><div class="legend"><span class="you">You</span><span class="cop">Police</span><span class="car">Cars</span><span class="station">Police station</span><span class="hospital">Hospital</span><span class="gunshop">Gun shop</span><span class="hint"><span class="keys-only">M to close</span><span class="touch-only">Tap to close</span></span></div></div></div>
     </div>
     <script type="module" src="/src/main.js"></script>
   </body>

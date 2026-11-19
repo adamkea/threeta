@@ -18,6 +18,19 @@ Controls:
 - **M** city map (shows you, police and traffic)
 - **Q** draw / holster your pistol (on foot), **mouse** to aim, **left click** (or **Ctrl**) to shoot, **E** reload
 
+### Phones & tablets
+
+On a touch screen the game shows on-screen controls (`src/ui/TouchControls.js`), best played in landscape:
+- **Left thumbstick** (touch anywhere on the left half): on foot, walk, or push it all the way to run. In a car,
+  point it where you want to go and the car turns that way; pull it back behind the car to brake and reverse.
+- **Right thumbstick** (right half, with a gun out): aim, and push past halfway to shoot (holding it keeps firing).
+- **Buttons:** the yellow action button gets in/out, hijacks, enters shops and buys (its label says what it'll do),
+  **Gun** draws / cycles / holsters, **Reload**, **Brake** (handbrake, in a car), and **Map**, **Reset** and full screen top left.
+- In the gun shop, tap an item to buy it; tap the map to close it.
+
+Buttons drive the same `Input` as the keyboard through virtual `Touch…` key codes, so new actions only need a
+binding in `src/core/Input.js` and a button in `TouchControls.js`.
+
 ## Motorbikes
 
 A sports bike (`motorbike` in `src/vehicles/carModels.js`) turns up in traffic and car parks, and
@@ -169,4 +182,5 @@ edges and boosts saturation. Roads have double-yellow centre lines, stop lines a
 - `src/combat/CombatSystem.js` – fires shots for anyone (player or NPC): hitscan vs people, cars (oriented boxes) and buildings, damage + knockback, panic, tracers / muzzle flashes / impact puffs
 - `src/render/skinBake.js` – bakes a person's or car's many parts into a few skinned meshes (one draw call per person, a handful per car), coloured from per-model palettes
 - `src/core/CameraRig.js` – high, angled, north-up follow camera with look-ahead and speed zoom
-- `src/core/Input.js` – keyboard + mouse input
+- `src/core/Input.js` – keyboard + mouse + touch input
+- `src/ui/TouchControls.js` – on-screen thumbsticks and buttons for touch screens

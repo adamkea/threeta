@@ -235,3 +235,87 @@ html, body {
 #shop .msg { font-weight: 700; font-size: 14px; }
 #shop .msg.bad { color: #c8141c; }
 #shop .hint { margin: 6px 16px 0; font-size: 12px; opacity: .7; }
+
+/* --- Touch screens (body.touch, set by ui/TouchControls.js) --- */
+html, body { touch-action: none; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; overscroll-behavior: none; }
+.touch-only { display: none; }
+body.touch .touch-only { display: inline; }
+body.touch .keys-only { display: none; }
+body.touch #help { display: none; }
+
+#touch { display: none; }
+body.touch #touch { display: block; position: absolute; inset: 0; pointer-events: auto; }
+#touch .zone { position: absolute; top: 0; bottom: 0; }
+#touch .zone.left { left: 0; width: 50%; }
+#touch .zone.right { right: 0; width: 50%; }
+#touch:not(.armed) .zone.right { pointer-events: none; }
+#touch.menu .zone, #touch.menu .stick, #touch.menu .buttons { display: none; }
+
+/* Floating thumbsticks: they appear where the thumb lands. */
+#touch .stick {
+  position: absolute; width: 124px; height: 124px; margin: -62px 0 0 -62px;
+  border-radius: 50%; border: 3px solid rgba(20,17,15,.8);
+  background: rgba(245,241,232,.14); box-shadow: 3px 3px 0 rgba(20,17,15,.6);
+  pointer-events: none; opacity: 0; transition: opacity .12s;
+}
+#touch .stick.on { opacity: 1; }
+#touch .stick .knob {
+  position: absolute; left: 50%; top: 50%; width: 56px; height: 56px; margin: -28px 0 0 -28px;
+  border-radius: 50%; background: #ffd23a; border: 3px solid #14110f;
+  box-shadow: 2px 2px 0 #14110f;
+}
+#touch .stick.aim .knob { background: #ff5a4a; }
+
+/* Buttons: a thumb-sized cluster in the bottom-right corner. */
+#touch .buttons {
+  position: absolute; right: calc(16px + env(safe-area-inset-right)); bottom: calc(16px + env(safe-area-inset-bottom));
+  width: 0; height: 0;
+}
+#touch .buttons .tbtn { position: absolute; }
+#touch .tbtn.use { right: 0; bottom: 0; }
+#touch .tbtn.brake, #touch .tbtn.weapon { right: 100px; bottom: 0; }
+#touch .tbtn.reload { right: 6px; bottom: 102px; }
+#touch .tbtn {
+  width: 76px; height: 76px; border-radius: 50%; padding: 0;
+  font: 900 italic 15px/1.05 system-ui, -apple-system, "Segoe UI", sans-serif; color: #fff; text-transform: uppercase;
+  background: rgba(20,17,15,.55); border: 3px solid #14110f; box-shadow: 3px 3px 0 #14110f;
+  -webkit-text-stroke: 1px #14110f; paint-order: stroke fill;
+  touch-action: none; -webkit-tap-highlight-color: transparent;
+}
+#touch .tbtn.down { transform: translate(2px, 2px); box-shadow: 1px 1px 0 #14110f; filter: brightness(1.3); }
+#touch .tbtn.use { width: 88px; height: 88px; font-size: 16px; }
+#touch.has-action .tbtn.use { background: #ffd23a; color: #14110f; -webkit-text-stroke: 0; }
+#touch .tbtn.brake { background: rgba(200,20,28,.7); }
+#touch .tbtn.map, #touch .tbtn.reset, #touch .tbtn.fullscreen { width: 56px; height: 56px; font-size: 12px; }
+/* Map / reset / full screen sit top-left, out of the thumbs' way. */
+#touch .tbtn.map { position: fixed; left: calc(12px + env(safe-area-inset-left)); top: calc(12px + env(safe-area-inset-top)); }
+#touch .tbtn.reset { position: fixed; left: calc(76px + env(safe-area-inset-left)); top: calc(12px + env(safe-area-inset-top)); }
+#touch .tbtn.fullscreen { position: absolute; left: calc(140px + env(safe-area-inset-left)); top: calc(12px + env(safe-area-inset-top)); font-size: 26px; -webkit-text-stroke: 0; }
+#touch:not(.in-car) .b-car,
+#touch:not(.on-foot) .b-foot,
+#touch:not(.armed) .b-armed,
+#touch.in-shop .b-street,
+#touch.in-shop .b-foot { display: none; }
+#touch.menu .tbtn.map { display: none; }
+
+/* Make room for the buttons: speedo and weapon move up under the cash. */
+body.touch #speed, body.touch #weapon { bottom: auto; top: calc(130px + env(safe-area-inset-top)); right: calc(22px + env(safe-area-inset-right)); }
+body.touch #speed { font-size: 36px; }
+body.touch #weapon .ammo { font-size: 32px; }
+body.touch #prompt { bottom: calc(24px + env(safe-area-inset-bottom)); font-size: 18px; }
+body.touch #version { display: none; }
+body.touch #map .frame canvas { max-width: 92vw; }
+
+@media (max-height: 500px) {
+  body.touch #wanted { font-size: 28px; }
+  body.touch #health { top: 50px; width: 150px; height: 12px; }
+  body.touch #money { top: 66px; font-size: 22px; }
+  body.touch #speed, body.touch #weapon { top: calc(98px + env(safe-area-inset-top)); }
+  body.touch #weapon .name { font-size: 13px; }
+  body.touch #weapon .icon { width: 52px; height: 26px; }
+  body.touch #banner { font-size: 56px; }
+  #touch .tbtn { width: 64px; height: 64px; font-size: 13px; }
+  #touch .tbtn.use { width: 74px; height: 74px; }
+  #touch .tbtn.brake, #touch .tbtn.weapon { right: 84px; }
+  #touch .tbtn.reload { right: 5px; bottom: 84px; }
+}

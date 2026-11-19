@@ -28,6 +28,7 @@ import { VehicleDamageSystem } from './vehicles/VehicleDamageSystem.js';
 import { DevConsole } from './ui/DevConsole.js';
 import { PerfStats } from './ui/PerfStats.js';
 import { Shops } from './interiors/Shops.js';
+import { TouchControls } from './ui/TouchControls.js';
 
 const canvas = document.getElementById('game');
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: false }); // AA is handled in InkRenderer (MSAA colour + SMAA)
@@ -221,6 +222,12 @@ const wantedEl = document.getElementById('wanted');
 const starEls = [...wantedEl.querySelectorAll('i')];
 const bannerEl = document.getElementById('banner');
 const cityMap = new CityMap(city, document.getElementById('map'));
+const touch = new TouchControls(input, document.getElementById('hud'));
+// On a touch screen, tapping the open map closes it.
+document.getElementById('map').addEventListener('touchstart', (e) => {
+  e.preventDefault();
+  if (cityMap.open) cityMap.toggle();
+});
 const healthEl = document.getElementById('health');
 const hurtEl = document.getElementById('hurt');
 const versionEl = document.getElementById('version');
@@ -241,7 +248,18 @@ const raycaster = new THREE.Raycaster();
 const aimPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -1.9);
 const _ndc = new THREE.Vector2();
 const _aimHit = new THREE.Vector3();
+const _touchAim = new THREE.Vector2(0, 1); // touch: the way the player last aimed (or walked)
 function updateAim() {
+  if (input.touch) {
+    // Twin-stick aiming: the aim stick if it's held, else keep facing the way you walk.
+    const p = player.ped.position;
+    const a = input.aimStick;
+    const m = input.move;
+    if (a.active && Math.hypot(a.x, a.y) > 0.2) _touchAim.set(a.x, a.y).normalize();
+    else if (!a.active && Math.hypot(m.x, m.y) > 0.1) _touchAim.set(m.x, m.y).normalize();
+    player.aim.set(p.x + _touchAim.x * 12, p.y + _touchAim.y * 12);
+    return;
+  }
   _ndc.set((input.mouse.x / window.innerWidth) * 2 - 1, -(input.mouse.y / window.innerHeight) * 2 + 1);
   raycaster.setFromCamera(_ndc, camera);
   if (raycaster.ray.intersectPlane(aimPlane, _aimHit)) player.aim.set(_aimHit.x, _aimHit.z);
@@ -587,7 +605,7 @@ function interiorFrame(dt) {
   rig.setZoom(...ZOOM.interior);
   rig.update(dt, shops.camTarget);
   speedBox.style.visibility = 'hidden';
-  promptEl.textContent = bustedTimer > 0 ? '' : shops.prompt();
+  showPrompt(bustedTimer > 0 ? '' : shops.prompt());
 }
 
 /** Per-frame bookkeeping & visuals out on the street. */
@@ -619,6 +637,29 @@ function streetFrame(dt) {
   const occupied = traffic.drivers.has(canEnter) || police.owns(canEnter);
   const what = canEnter?.isBike ? 'bike' : 'car';
   const carPrompt = canEnter ? (occupied ? `F — hijack ${what}` : canEnter.isBike ? 'F — get on' : 'F — get in') : '';
-  promptEl.textContent = player.inVehicle || bustedTimer > 0 ? '' : shops.prompt() || carPrompt;
+  showPrompt(player.inVehicle || bustedTimer > 0 ? '' : shops.prompt() || carPrompt);
+}
+
+/**
+ * Show a prompt like "F — get in". On a touch screen the key hint is dropped: the action button
+ * is relabelled to say what it'll do instead (or "Get out" while driving).
+ */
+function showPrompt(text) {
+  const keyed = /^F — (.*)$/.exec(text);
+  if (input.touch && keyed) text = '';
+  promptEl.textContent = text;
+  // "get in" / "get on" keep both words; "hijack car", "enter Lock & Load", "buy guns…" just the verb.
+  const words = keyed ? keyed[1].split(' ') : [];
+  const verb = words[0] === 'get' ? words.slice(0, 2).join(' ') : (words[0] ?? '');
+  const action = verb && verb[0].toUpperCase() + verb.slice(1);
+  touch.update({
+    inVehicle: player.inVehicle,
+    onFoot: !player.inVehicle,
+    armed: player.armed && !shops.inside,
+    inShop: !!shops.inside,
+    menuOpen: shops.menu.isOpen,
+    mapOpen: cityMap.open,
+    action: player.inVehicle && bustedTimer === 0 ? 'Get out' : action,
+  });
 }
 requestAnimationFrame(frame);
