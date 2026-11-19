@@ -14,11 +14,14 @@ const BINDINGS = {
   reload: ['KeyE'],
 };
 
+const isTextField = (el) => el instanceof HTMLElement && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA');
+
 export class Input {
   constructor(target = window) {
     this.keys = new Set();
     this.pressedThisFrame = new Set();
     target.addEventListener('keydown', (e) => {
+      if (isTextField(e.target)) return; // typing in the dev console isn't driving
       if (Object.values(BINDINGS).flat().includes(e.code)) e.preventDefault();
       if (!this.keys.has(e.code)) this.pressedThisFrame.add(e.code);
       this.keys.add(e.code);
@@ -39,6 +42,11 @@ export class Input {
     });
     target.addEventListener('mouseup', (e) => this.keys.delete(`Mouse${e.button}`));
     target.addEventListener('contextmenu', (e) => e.preventDefault());
+  }
+
+  /** Drop every held key/button (e.g. when focus moves to a text field). */
+  releaseAll() {
+    this.keys.clear();
   }
 
   isDown(action) {

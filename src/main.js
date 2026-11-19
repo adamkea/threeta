@@ -20,6 +20,7 @@ import { CityMap } from './ui/CityMap.js';
 import { weaponIcon } from './ui/weaponIcons.js';
 import { CombatSystem } from './combat/CombatSystem.js';
 import { ParkedCars } from './vehicles/ParkedCars.js';
+import { DevConsole } from './ui/DevConsole.js';
 
 const canvas = document.getElementById('game');
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: false }); // AA is handled in InkRenderer (MSAA colour + SMAA)
@@ -268,9 +269,42 @@ function updateCombatHud(dt) {
   canvas.style.cursor = player.armed && bustedTimer === 0 ? 'crosshair' : '';
 }
 
+// --- Dev console (` to toggle) ---
+const devConsole = new DevConsole({ onOpen: () => input.releaseAll() });
+
+/** Set the wanted level from the console, standing the police down when it hits zero. */
+function setWanted(stars) {
+  const had = wanted.stars;
+  wanted.setStars(stars);
+  if (had && !wanted.stars) police.standDown();
+}
+
+const wantedStatus = () =>
+  `Wanted: ${wanted.stars} star${wanted.stars === 1 ? '' : 's'}${wanted.suppressed ? ' (wanted level disabled)' : ''}`;
+
+devConsole.register('wanted', 'wanted [clear | up [n] | down [n] | 0-5 | off | on] — show / change the wanted level', ([sub, n]) => {
+  const count = n === undefined ? 1 : Number(n);
+  if (n !== undefined && !Number.isFinite(count)) throw new Error(`Not a number: "${n}"`);
+  if (sub === 'off' || sub === 'on') {
+    wanted.suppressed = sub === 'off';
+    if (wanted.suppressed) setWanted(0);
+    return wanted.suppressed ? 'Wanted level disabled — crimes are ignored.' : 'Wanted level enabled.';
+  }
+  if (sub !== undefined && sub !== 'clear' && wanted.suppressed) {
+    throw new Error('Wanted level is disabled — run "wanted on" first.');
+  }
+  if (sub === undefined) return wantedStatus();
+  if (sub === 'clear') setWanted(0);
+  else if (sub === 'up') setWanted(wanted.stars + count);
+  else if (sub === 'down') setWanted(wanted.stars - count);
+  else if (/^[0-5]$/.test(sub)) setWanted(Number(sub));
+  else throw new Error(`Unknown option "${sub}". Try: clear, up, down, 0-5, off, on.`);
+  return wantedStatus();
+});
+
 // Dev-only hook for debugging / automated tests.
 if (import.meta.env.DEV) {
-  window.__game = { parked, skids, player, traffic, npcs, lights, world, allCars, allPeds, step, input, wanted, police, combat, STEP: 1 / 120 };
+  window.__game = { parked, skids, player, traffic, npcs, lights, world, allCars, allPeds, step, input, wanted, police, combat, devConsole, STEP: 1 / 120 };
 }
 
 // --- Main loop: fixed-step physics, variable-rate rendering ---
