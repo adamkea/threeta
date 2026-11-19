@@ -32,6 +32,8 @@ export class Car {
     this.heading = 0;
     this.steer = 0; // smoothed -1..1
     this.braking = false;
+    this.active = true; // inactive cars are pooled and skipped by physics/AI
+    this.yawRate = 0; // extra spin from impacts (rad/s)
     this.wheelSpin = 0;
     this.bodyRoll = 0;
     this.bodyPitch = 0;
@@ -50,15 +52,47 @@ export class Car {
     return new THREE.Vector2(-Math.cos(this.heading), Math.sin(this.heading));
   }
 
-  reset(x, z, heading = 0) {
+  reset(x, z, heading = 0, speed = 0) {
     this.position.set(x, z);
-    this.velocity.set(0, 0);
     this.heading = heading;
+    this.velocity.copy(this.forward).multiplyScalar(speed);
     this.steer = 0;
+    this.yawRate = 0;
   }
 
-  /** Fixed-step physics update. `controls` = { throttle, steer, handbrake } */
-  update(dt, controls, colliders) {
+  setColor(color) {
+    this.paint.color.set(color);
+  }
+
+  /** Turning ability (0..1) at a given forward speed: none when stopped, slightly less when fast. */
+  speedFactor(vF) {
+    const s = Math.abs(vF);
+    return Math.min(1, s / 5) * (1 - 0.35 * Math.min(1, s / this.cfg.maxSpeed));
+  }
+
+  /** Steering input (-1..1) needed to achieve a yaw rate (rad/s, positive = left). Used by AI. */
+  steerForYawRate(yawRate) {
+    const vF = this.velocity.dot(this.forward);
+    const k = this.cfg.steerRate * this.speedFactor(vF) * Math.sign(vF);
+    if (Math.abs(k) < 1e-3) return 0;
+    return THREE.MathUtils.clamp(yawRate / k, -1, 1);
+  }
+
+  /** World positions of the two collision circles (front, rear). */
+  collisionCircles() {
+    const fwd = this.forward;
+    const o = this.cfg.length / 2 - this.cfg.collisionRadius;
+    return [
+      [this.position.x + fwd.x * o, this.position.y + fwd.y * o],
+      [this.position.x - fwd.x * o, this.position.y - fwd.y * o],
+    ];
+  }
+
+  /**
+   * Fixed-step physics update. `controls` = { throttle, steer, handbrake };
+   * `world.query(x, z)` returns static AABB colliders near a point.
+   */
+  update(dt, controls, world) {
     const c = this.cfg;
     const fwd = this.forward;
     const right = this.right;
@@ -70,14 +104,14 @@ export class Car {
     this.braking = false;
     if (controls.throttle > 0) {
       if (vF < -0.5) {
-        vF += c.brakeDecel * dt;
+        vF += c.brakeDecel * controls.throttle * dt;
         this.braking = true;
       } else {
         vF += c.engineAccel * controls.throttle * (1 - Math.max(0, vF) / c.maxSpeed) * dt * 1.6;
       }
     } else if (controls.throttle < 0) {
       if (vF > 0.5) {
-        vF -= c.brakeDecel * dt;
+        vF -= c.brakeDecel * -controls.throttle * dt;
         this.braking = true;
       } else {
         vF -= c.reverseAccel * dt;
@@ -102,9 +136,10 @@ export class Car {
     // --- Steering ---
     this.steer += (controls.steer - this.steer) * Math.min(1, c.steerResponse * dt);
     // Need some speed to turn; turning gets a little less sharp at high speed.
-    const speedFactor = Math.min(1, Math.abs(vF) / 5) * (1 - 0.35 * Math.min(1, Math.abs(vF) / c.maxSpeed));
     const drift = controls.handbrake ? 1.35 : 1;
-    this.heading += this.steer * c.steerRate * speedFactor * drift * Math.sign(vF) * dt;
+    this.heading += this.steer * c.steerRate * this.speedFactor(vF) * drift * Math.sign(vF) * dt;
+    this.heading += this.yawRate * dt;
+    this.yawRate *= Math.exp(-3 * dt);
 
     // Recompose velocity in the (old) car frame. Using the pre-turn frame means the
     // velocity lags behind the new heading slightly, which is what gives slides.
@@ -112,7 +147,7 @@ export class Car {
 
     const prevVel = this.velocity.clone();
     this.position.addScaledVector(this.velocity, dt);
-    this.#collide(colliders);
+    this.#collide(world);
 
     // --- Visual state ---
     this.wheelSpin += (vF * dt) / 0.4;
@@ -123,7 +158,7 @@ export class Car {
   }
 
   /** Two collision circles along the car's long axis, resolved against AABBs. */
-  #collide(colliders) {
+  #collide(world) {
     const c = this.cfg;
     const fwd = this.forward;
     const offset = c.length / 2 - c.collisionRadius;
@@ -134,7 +169,7 @@ export class Car {
       for (const sign of [1, -1]) {
         const cx = this.position.x + fwd.x * offset * sign;
         const cz = this.position.y + fwd.y * offset * sign;
-        for (const b of colliders) {
+        for (const b of world.query(cx, cz)) {
           if (cx < b.minX - r || cx > b.maxX + r || cz < b.minZ - r || cz > b.maxZ + r) continue;
           const px = THREE.MathUtils.clamp(cx, b.minX, b.maxX);
           const pz = THREE.MathUtils.clamp(cz, b.minZ, b.maxZ);
@@ -196,7 +231,7 @@ export class Car {
     this.body = body;
 
     const { length: L, width: W } = this.cfg;
-    const paint = new THREE.MeshLambertMaterial({ color });
+    const paint = (this.paint = new THREE.MeshLambertMaterial({ color }));
     const dark = new THREE.MeshLambertMaterial({ color: 0x1c1f26 });
     const glass = new THREE.MeshLambertMaterial({ color: 0x23344a });
     const add = (geo, mat, x, y, z, parent = body) => {

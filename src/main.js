@@ -3,6 +3,11 @@ import { Input } from './core/Input.js';
 import { CameraRig } from './core/CameraRig.js';
 import { createCity, roadCenter, CITY } from './world/City.js';
 import { Car } from './vehicles/Car.js';
+import { ColliderGrid } from './world/ColliderGrid.js';
+import { TrafficLights } from './traffic/TrafficLights.js';
+import { TrafficSystem } from './traffic/TrafficSystem.js';
+import { resolveCarCollisions } from './physics/carCollisions.js';
+import { createRng } from './core/random.js';
 
 const canvas = document.getElementById('game');
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
@@ -33,11 +38,20 @@ const sunOffset = new THREE.Vector3(-60, 110, 40);
 // --- World ---
 const city = createCity();
 scene.add(city.group);
+const world = new ColliderGrid(city.colliders);
 
 const car = new Car({ color: 0xd23b2f });
 const spawn = () => car.reset(roadCenter(Math.floor(CITY.blocks / 2)) + 3.5, roadCenter(CITY.blocks / 2) + 20, Math.PI);
 spawn();
 scene.add(car.mesh);
+
+// --- Traffic ---
+const rng = createRng(42);
+const lights = new TrafficLights(rng);
+scene.add(lights.mesh);
+const traffic = new TrafficSystem(scene, rng, lights);
+const allCars = [car, ...traffic.cars];
+traffic.populate({ x: car.position.x, z: car.position.y }, allCars);
 
 const input = new Input();
 const rig = new CameraRig(camera);
@@ -53,6 +67,11 @@ function resize() {
 window.addEventListener('resize', resize);
 resize();
 
+// Dev-only hook for debugging / automated tests.
+if (import.meta.env.DEV) {
+  window.__game = { car, traffic, lights, world, allCars, STEP: 1 / 120, resolveCarCollisions };
+}
+
 // --- Main loop: fixed-step physics, variable-rate rendering ---
 const STEP = 1 / 120;
 let acc = 0;
@@ -67,10 +86,15 @@ function frame(now) {
   const controls = { throttle: input.throttle, steer: input.steer, handbrake: input.isDown('handbrake') };
   acc += dt;
   while (acc >= STEP) {
-    car.update(STEP, controls, city.colliders);
+    car.update(STEP, controls, world);
+    traffic.step(STEP, allCars, world);
+    resolveCarCollisions(allCars.filter((c) => c.active));
     acc -= STEP;
   }
+  lights.update(dt);
   car.syncMesh();
+  for (const c of traffic.cars) if (c.active) c.syncMesh();
+  traffic.manage(rig.focus, allCars);
   rig.update(dt, car);
 
   // Keep the shadow frustum centred on the action.
