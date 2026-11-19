@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { SMAAPass } from 'three/examples/jsm/postprocessing/SMAAPass.js';
+import { GLOW_LAYER } from '../effects/SirenGlow.js';
 
 /**
  * Two-pass "comic ink" renderer.
@@ -119,6 +120,7 @@ export class InkRenderer {
     u.near.value = camera.near;
     u.far.value = camera.far;
 
+    camera.layers.enable(GLOW_LAYER);
     r.setRenderTarget(this.colorTarget);
     r.render(scene, camera);
 
@@ -131,7 +133,9 @@ export class InkRenderer {
     r.setRenderTarget(this.normalTarget);
     r.setClearColor(0x8080ff, 1);
     r.clear();
+    camera.layers.disable(GLOW_LAYER); // glows get no ink outlines
     r.render(scene, camera);
+    camera.layers.enable(GLOW_LAYER);
     scene.overrideMaterial = null;
     scene.background = bg;
     r.shadowMap.autoUpdate = autoShadow;

@@ -4,6 +4,7 @@ import { MODELS, buildCarMesh } from './carModels.js';
 import { offIsland, WATER_Y } from '../world/City.js';
 import { showBone } from '../render/skinBake.js';
 import { VehicleDamage } from './damage.js';
+import { SirenGlow } from '../effects/SirenGlow.js';
 
 const GRAVITY = 25; // m/s² (a touch heavy, so falls read well from the high camera)
 const SINK_DEPTH = -5; // how far a car sinks before settling on the seabed
@@ -91,6 +92,7 @@ export class Car {
     this.wheels = parts.wheels;
     this.loose = parts.loose; // parts that can fall off in a crash
     this.sirenMats = parts.siren; // null unless the model has a lightbar
+    this.sirenGlow = parts.siren ? new SirenGlow(this.mesh, this.body, parts.siren.lamps) : null;
     this.riderBone = parts.rider ?? null; // bikes only
     this.riderJacket = parts.riderJacket ?? null;
     this.helmet = parts.helmet ?? null;
@@ -413,6 +415,7 @@ export class Car {
       if (d.destroyed) this.siren = false;
       this.sirenMats.red.color.setHex(flash(0) ? 0xff3040 : this.siren ? 0x4a0a10 : 0xa01820);
       this.sirenMats.blue.color.setHex(flash(0.5) ? 0x4a8cff : this.siren ? 0x0a1440 : 0x1c3ea8);
+      this.sirenGlow.set(flash(0) ? 1 : 0, flash(0.5) ? 1 : 0);
     }
   }
 }
