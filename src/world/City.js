@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { createRng } from '../core/random.js';
+import { toon } from '../render/toon.js';
 
 // City layout constants (metres). The city is a square grid of blocks separated by roads.
 export const CITY = {
@@ -33,8 +34,10 @@ function blockMin(i) {
   return -CITY.half + CITY.roadWidth + i * CITY.cell;
 }
 
+// Comic-city palette: warm brick, sandstone, slate and a few loud accents.
 const BUILDING_COLORS = [
-  0xd9a37a, 0xc76b5a, 0x8fa9b8, 0xe0c98f, 0xa7b59a, 0xb58fa8, 0xd8d2c4, 0x9a8f86, 0x7d9bb0, 0xe6b8a2,
+  0xc9744f, 0xb2473a, 0x7f9fb6, 0xe2c27d, 0x8fae7e, 0xb07aa0, 0xd9d1bf, 0x8c8079, 0x5f86a8, 0xe8a07c,
+  0x6f6a73, 0xd8b45a,
 ];
 
 /**
@@ -78,7 +81,7 @@ export function createCity(seed = 1337) {
   // Sidewalk slabs (one instanced mesh for every block).
   const sidewalkMesh = new THREE.InstancedMesh(
     new THREE.BoxGeometry(CITY.blockSize, CITY.curbHeight, CITY.blockSize),
-    new THREE.MeshLambertMaterial({ color: 0xb9b6ae }),
+    toon({ map: createTileTexture() }),
     sidewalkMatrices.length,
   );
   sidewalkMatrices.forEach((m, i) => sidewalkMesh.setMatrixAt(i, m));
@@ -87,12 +90,12 @@ export function createCity(seed = 1337) {
 
   const wallMesh = new THREE.Mesh(
     walls.build(),
-    new THREE.MeshLambertMaterial({ map: createWindowTexture(), vertexColors: true }),
+    toon({ map: createWindowTexture(), vertexColors: true }),
   );
   wallMesh.castShadow = wallMesh.receiveShadow = true;
   group.add(wallMesh);
 
-  const roofMesh = new THREE.Mesh(roofs.build(), new THREE.MeshLambertMaterial({ vertexColors: true }));
+  const roofMesh = new THREE.Mesh(roofs.build(), toon({ map: createRoofTexture(), vertexColors: true }));
   roofMesh.castShadow = roofMesh.receiveShadow = true;
   group.add(roofMesh);
 
@@ -123,17 +126,31 @@ function buildBlock(rng, x0, z0, downtown, walls, roofs, colliders) {
       const y0 = CITY.curbHeight;
 
       walls.boxSides(minX, minZ, minX + cw, minZ + rw, y0, y0 + h, color);
-      roofs.top(minX, minZ, minX + cw, minZ + rw, y0 + h, color.clone().multiplyScalar(0.7));
+      // Flat grey roof inside a parapet lip — gives the ink pass a crisp rooftop outline.
+      const top = y0 + h;
+      const roofCol = new THREE.Color(0x7d7a78).lerp(color, 0.25);
+      const lip = color.clone().multiplyScalar(0.85);
+      const p = 0.5, ph = 0.7;
+      roofs.top(minX, minZ, minX + cw, minZ + rw, top, roofCol);
+      for (const [ax, az, bx, bz] of [
+        [minX, minZ, minX + cw, minZ + p],
+        [minX, minZ + rw - p, minX + cw, minZ + rw],
+        [minX, minZ + p, minX + p, minZ + rw - p],
+        [minX + cw - p, minZ + p, minX + cw, minZ + rw - p],
+      ]) {
+        roofs.boxSides(ax, az, bx, bz, top, top + ph, lip);
+        roofs.top(ax, az, bx, bz, top + ph, lip.clone().multiplyScalar(1.1));
+      }
 
       // Rooftop detail: an AC unit / stairwell box.
       if (rng.chance(0.7)) {
         const s = rng.range(2, Math.min(cw, rw) * 0.4);
         const px = rng.range(minX + 1, minX + cw - s - 1);
         const pz = rng.range(minZ + 1, minZ + rw - s - 1);
-        const top = y0 + h + rng.range(1, 3);
-        const dc = new THREE.Color(0x9a9a9a);
-        roofs.boxSides(px, pz, px + s, pz + s, y0 + h, top, dc);
-        roofs.top(px, pz, px + s, pz + s, top, dc.clone().multiplyScalar(0.8));
+        const unitTop = top + rng.range(1, 3);
+        const dc = new THREE.Color(rng.pick([0xb8bcc2, 0x9aa3ad, 0xc9b79a]));
+        roofs.boxSides(px, pz, px + s, pz + s, top, unitTop, dc);
+        roofs.top(px, pz, px + s, pz + s, unitTop, dc.clone().multiplyScalar(1.1));
       }
 
       colliders.push({ minX, maxX: minX + cw, minZ, maxZ: minZ + rw });
@@ -145,7 +162,7 @@ function createGround() {
   const g = new THREE.Group();
   const asphalt = new THREE.Mesh(
     new THREE.PlaneGeometry(CITY.size, CITY.size),
-    new THREE.MeshLambertMaterial({ color: 0x3b3d42 }),
+    toon({ map: createAsphaltTexture() }),
   );
   asphalt.rotation.x = -Math.PI / 2;
   asphalt.receiveShadow = true;
@@ -154,14 +171,14 @@ function createGround() {
   // Water surrounding the island city.
   const water = new THREE.Mesh(
     new THREE.PlaneGeometry(CITY.size * 6, CITY.size * 6),
-    new THREE.MeshLambertMaterial({ color: 0x2f6f8f }),
+    toon({ color: 0x2f8fb8 }),
   );
   water.rotation.x = -Math.PI / 2;
   water.position.y = -0.6;
   g.add(water);
 
   // Sea wall around the edge.
-  const wallMat = new THREE.MeshLambertMaterial({ color: 0x8a8577 });
+  const wallMat = toon({ color: 0x9a9384 });
   const t = 2;
   for (const [w, d, x, z] of [
     [CITY.size + t * 2, t, 0, -CITY.half - t / 2],
@@ -189,52 +206,75 @@ function addPerimeter(colliders) {
 }
 
 function createRoadMarkings() {
-  const dashLen = 3;
-  const dashGap = 3;
-  const dashes = [];
+  const half = CITY.roadWidth / 2;
+  const yellow = []; // [x, z, length, alongX]
+  const white = [];
   const crossings = [];
+  const stops = [];
 
   for (let line = 0; line <= CITY.blocks; line++) {
     const c = roadCenter(line);
     for (let seg = 0; seg < CITY.blocks; seg++) {
       const s0 = blockMin(seg);
       const s1 = s0 + CITY.blockSize;
-      // Centre-line dashes along this road segment, in both orientations.
-      for (let s = s0 + 4; s + dashLen < s1 - 3; s += dashLen + dashGap) {
-        dashes.push([c, s + dashLen / 2, false]); // road running along Z
-        dashes.push([s + dashLen / 2, c, true]); // road running along X
+      const a = s0 + 3.8, b = s1 - 3.8; // between the stop lines
+      const mid = (a + b) / 2, len = b - a;
+      // Double yellow centre line.
+      for (const k of [-0.22, 0.22]) {
+        yellow.push([c + k, mid, len, false], [mid, c + k, len, true]);
+      }
+      // Solid white edge lines just inside the curbs.
+      for (const k of [-(half - 0.7), half - 0.7]) {
+        white.push([c + k, mid, len, false], [mid, c + k, len, true]);
       }
       // Zebra crossings at both ends of the segment.
       for (const edge of [s0 + 1.5, s1 - 1.5]) {
-        for (let k = -5; k <= 5; k += 1.6) {
-          crossings.push([c + k, edge, false]);
-          crossings.push([edge, c + k, true]);
+        for (let k = -half + 1; k <= half - 1; k += 1.5) {
+          crossings.push([c + k, edge, 2.5, false], [edge, c + k, 2.5, true]);
         }
       }
+      // Stop lines across the approaching lanes (traffic drives on the right).
+      const sl = half / 2;
+      stops.push(
+        [c - sl, s1 - 3.4, 0, false], // +Z traffic, lane at -X
+        [c + sl, s0 + 3.4, 0, false], // -Z traffic, lane at +X
+        [s1 - 3.4, c + sl, 0, true], // +X traffic, lane at +Z
+        [s0 + 3.4, c - sl, 0, true], // -X traffic, lane at -Z
+      );
     }
   }
 
   const g = new THREE.Group();
-  const mat = new THREE.MeshBasicMaterial({ color: 0xe8e2c8 });
-  const place = (list, geo) => {
-    const mesh = new THREE.InstancedMesh(geo, mat, list.length);
+  const place = (list, w, color, y) => {
+    const mesh = new THREE.InstancedMesh(new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2), toon({ color }), list.length);
     const m = new THREE.Matrix4();
     const rot = new THREE.Matrix4().makeRotationY(Math.PI / 2);
-    list.forEach(([x, z, alongX], i) => {
-      m.makeTranslation(x, 0.02, z);
+    const scl = new THREE.Matrix4();
+    list.forEach(([x, z, len, alongX], i) => {
+      m.makeTranslation(x, y, z);
       if (alongX) m.multiply(rot);
+      m.multiply(scl.makeScale(w, 1, len));
       mesh.setMatrixAt(i, m);
     });
+    mesh.receiveShadow = true;
     g.add(mesh);
   };
-  place(dashes, new THREE.BoxGeometry(0.3, 0.02, dashLen));
-  place(crossings, new THREE.BoxGeometry(0.8, 0.02, 2.5));
+  place(yellow, 0.22, 0xf2c230, 0.02);
+  place(white, 0.25, 0xeeeae0, 0.02);
+  place(crossings, 0.9, 0xeeeae0, 0.021);
+  // Stop lines: thick bars spanning half the road. Encode as rotated wide strips.
+  place(
+    stops.map(([x, z, , alongX]) => [x, z, half - 0.4, !alongX]),
+    0.6,
+    0xeeeae0,
+    0.022,
+  );
   return g;
 }
 
 function createParks(rng, parks, colliders) {
   const g = new THREE.Group();
-  const grassMat = new THREE.MeshLambertMaterial({ color: 0x6b9b4b });
+  const grassMat = toon({ color: 0x5fae3f });
   const trees = [];
   for (const { x0, z0 } of parks) {
     const inner = CITY.blockSize - CITY.sidewalk * 2;
@@ -253,13 +293,13 @@ function createParks(rng, parks, colliders) {
   }
 
   const trunk = new THREE.InstancedMesh(
-    new THREE.CylinderGeometry(0.25, 0.35, 2.5, 6),
-    new THREE.MeshLambertMaterial({ color: 0x6b4a2f }),
+    new THREE.CylinderGeometry(0.25, 0.35, 2.5, 8),
+    toon({ color: 0x7a5232 }),
     trees.length,
   );
   const leaves = new THREE.InstancedMesh(
-    new THREE.IcosahedronGeometry(2.2, 0),
-    new THREE.MeshLambertMaterial({ color: 0x3f7a35, flatShading: true }),
+    new THREE.SphereGeometry(2.3, 12, 8).scale(1, 0.8, 1), // round, cartoon canopy
+    toon({ color: 0x3f9a3a }),
     trees.length,
   );
   const m = new THREE.Matrix4();
@@ -287,12 +327,12 @@ function createStreetLamps(colliders) {
     }
   }
   const pole = new THREE.InstancedMesh(
-    new THREE.CylinderGeometry(0.12, 0.15, 6, 6),
-    new THREE.MeshLambertMaterial({ color: 0x2c2f36 }),
+    new THREE.CylinderGeometry(0.14, 0.18, 6, 8),
+    toon({ color: 0x2f5a3e }), // classic dark-green city lamp posts
     spots.length,
   );
   const head = new THREE.InstancedMesh(
-    new THREE.BoxGeometry(0.6, 0.25, 0.6),
+    new THREE.BoxGeometry(0.8, 0.35, 0.8),
     new THREE.MeshBasicMaterial({ color: 0xfff1b8 }),
     spots.length,
   );
@@ -310,26 +350,97 @@ function createStreetLamps(colliders) {
   return g;
 }
 
-/** Canvas texture of a single 3m x 3m facade tile with one window. */
-function createWindowTexture() {
-  const size = 64;
+function canvasTexture(size, draw, repeat = 1) {
   const canvas = document.createElement('canvas');
   canvas.width = canvas.height = size;
-  const ctx = canvas.getContext('2d');
-  ctx.fillStyle = '#ffffff';
-  ctx.fillRect(0, 0, size, size);
-  const grad = ctx.createLinearGradient(0, 14, 0, 46);
-  grad.addColorStop(0, '#3a4a5c');
-  grad.addColorStop(1, '#58708a');
-  ctx.fillStyle = grad;
-  ctx.fillRect(14, 14, 36, 32);
-  ctx.fillStyle = 'rgba(0,0,0,0.25)';
-  ctx.fillRect(12, 46, 40, 4); // sill shadow
+  draw(canvas.getContext('2d'), size);
   const tex = new THREE.CanvasTexture(canvas);
   tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  tex.repeat.set(repeat, repeat);
   tex.colorSpace = THREE.SRGBColorSpace;
-  tex.anisotropy = 4;
+  tex.anisotropy = 8;
   return tex;
+}
+
+/** Facade tile (3m x 3m): white wall (tinted by vertex colour), a framed window with a glint. */
+function createWindowTexture() {
+  return canvasTexture(64, (ctx) => {
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, 64, 64);
+    ctx.fillStyle = 'rgba(0,0,0,0.12)'; // floor band
+    ctx.fillRect(0, 56, 64, 8);
+    ctx.fillStyle = '#e9e4da'; // frame
+    ctx.fillRect(11, 10, 42, 40);
+    ctx.fillStyle = '#26354d'; // glass
+    ctx.fillRect(14, 13, 36, 34);
+    ctx.fillStyle = 'rgba(140,190,235,0.55)'; // diagonal reflection glint
+    ctx.beginPath();
+    ctx.moveTo(20, 47); ctx.lineTo(34, 13); ctx.lineTo(42, 13); ctx.lineTo(28, 47);
+    ctx.fill();
+    ctx.fillStyle = '#e9e4da'; // mullion
+    ctx.fillRect(14, 29, 36, 2);
+    ctx.fillStyle = '#1a1714'; // inked outline round the frame
+    ctx.strokeStyle = '#1a1714';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(11, 10, 42, 40);
+  });
+}
+
+/** Tar-and-gravel rooftop: speckled, with the odd seam. Tinted by vertex colour. */
+function createRoofTexture() {
+  return canvasTexture(128, (ctx, n) => {
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, n, n);
+    for (let i = 0; i < 1500; i++) {
+      ctx.fillStyle = `rgba(0,0,0,${Math.random() * 0.12})`;
+      ctx.fillRect(Math.random() * n, Math.random() * n, 2, 2);
+    }
+    ctx.fillStyle = 'rgba(0,0,0,0.14)';
+    ctx.fillRect(0, 0, n, 3);
+    ctx.fillRect(0, 0, 3, n);
+  });
+}
+
+/** Paving slabs: light grey squares with dark grout lines. Repeats 2m tiles over a block. */
+function createTileTexture() {
+  return canvasTexture(
+    64,
+    (ctx) => {
+      ctx.fillStyle = '#c9c6bd';
+      ctx.fillRect(0, 0, 64, 64);
+      for (let i = 0; i < 300; i++) {
+        ctx.fillStyle = `rgba(0,0,0,${Math.random() * 0.06})`;
+        ctx.fillRect(Math.random() * 64, Math.random() * 64, 2, 2);
+      }
+      ctx.fillStyle = '#8f8b82';
+      ctx.fillRect(0, 0, 64, 2);
+      ctx.fillRect(0, 0, 2, 64);
+    },
+    CITY.blockSize / 2,
+  );
+}
+
+/** Asphalt: mid grey with speckle and a few darker patches. */
+function createAsphaltTexture() {
+  return canvasTexture(
+    256,
+    (ctx, n) => {
+      ctx.fillStyle = '#5b5d63';
+      ctx.fillRect(0, 0, n, n);
+      for (let i = 0; i < 18; i++) {
+        ctx.fillStyle = `rgba(30,30,35,${0.03 + Math.random() * 0.04})`;
+        ctx.beginPath();
+        ctx.ellipse(Math.random() * n, Math.random() * n, 10 + Math.random() * 40, 6 + Math.random() * 20, Math.random() * 3, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      for (let i = 0; i < 4000; i++) {
+        const v = Math.random() < 0.5 ? 255 : 0;
+        ctx.fillStyle = `rgba(${v},${v},${v},${Math.random() * 0.08})`;
+        ctx.fillRect(Math.random() * n, Math.random() * n, 1, 1);
+      }
+    },
+    CITY.size / 16,
+  );
 }
 
 /** Accumulates coloured, UV-mapped quads into a single merged BufferGeometry. */
@@ -366,7 +477,8 @@ class QuadBuilder {
   }
 
   top(x0, z0, x1, z1, y, color) {
-    this.quad([x0, y, z1], [x1, y, z1], [x1, y, z0], [x0, y, z0], [0, 1, 0], 1, 1, color);
+    const t = this.tile;
+    this.quad([x0, y, z1], [x1, y, z1], [x1, y, z0], [x0, y, z0], [0, 1, 0], (x1 - x0) / t, (z1 - z0) / t, color);
   }
 
   build() {

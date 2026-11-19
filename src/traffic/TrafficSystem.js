@@ -1,9 +1,9 @@
 import { Car } from '../vehicles/Car.js';
+import { randomModel } from '../vehicles/carModels.js';
 import { CITY } from '../world/City.js';
 import { DIRS, HALF_ROAD, LANE_OFFSET, headingOf, isValidNode, nodeX, rightOf } from './RoadNetwork.js';
 import { TrafficDriver } from './TrafficDriver.js';
 
-const PAINTS = [0xf2f2f2, 0x2a2d34, 0x3a6ea5, 0xe0b23a, 0x6c8a4b, 0x8c2f39, 0xa9b2bd, 0x2f8f8a, 0xd9762b];
 
 /**
  * Keeps a pool of AI cars alive around the player: spawns them on lanes just out of view,
@@ -23,7 +23,7 @@ export class TrafficSystem {
   }
 
   #createPooledCar() {
-    const car = new Car({ engineAccel: 12, maxSpeed: 20 });
+    const car = new Car({ model: randomModel(this.rng), engineAccel: 12, maxSpeed: 20 });
     car.active = false;
     car.mesh.visible = false;
     this.scene.add(car.mesh);
@@ -40,8 +40,7 @@ export class TrafficSystem {
     this.drivers.delete(car);
     car.ai = null;
     this.cars[k] = this.#createPooledCar();
-    car.cfg.engineAccel = 20; // give it the full engine back now a player's driving it
-    car.cfg.maxSpeed = 34;
+    car.restorePerformance(); // full engine back now a player's driving it
   }
 
   /** Fill the city immediately (used at start, so traffic isn't only off-screen). */
@@ -91,7 +90,7 @@ export class TrafficSystem {
       if (dist < minD || dist > maxD) continue;
       if (others.some((o) => o !== car && o.active && Math.hypot(o.position.x - x, o.position.y - z) < 10)) continue;
 
-      car.setColor(this.rng.pick(PAINTS));
+      car.respray(this.rng);
       car.reset(x, z, headingOf(d), 9);
       car.active = true;
       car.mesh.visible = true;

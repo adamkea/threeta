@@ -1,6 +1,6 @@
 import * as THREE from 'three';
+import { MODELS, buildCarMesh } from './carModels.js';
 
-// Tunable handling parameters (SI-ish units: metres, seconds).
 let nextId = 1;
 
 const DEFAULTS = {
@@ -27,20 +27,35 @@ const DEFAULTS = {
  * Heading 0 faces +Z. Forward vector = (sin h, cos h).
  */
 export class Car {
-  constructor({ color = 0xd23b2f, ...opts } = {}) {
-    this.cfg = { ...DEFAULTS, ...opts };
+  constructor({ model = 'sedan', color, stripes = null, ...opts } = {}) {
+    this.modelName = model;
+    this.model = MODELS[model];
+    const m = this.model;
+    // Base performance for this body style (traffic AI detunes it; see restorePerformance).
+    this.perf = { ...DEFAULTS, ...m.cfg, collisionRadius: m.cfg.width / 2 + 0.05 };
+    this.cfg = { ...this.perf, ...opts };
     this.position = new THREE.Vector2(0, 0); // x, z
     this.velocity = new THREE.Vector2(0, 0);
     this.heading = 0;
     this.steer = 0; // smoothed -1..1
     this.braking = false;
+    this.slip = 0;
+    this.handbrake = false;
     this.id = nextId++;
     this.active = true; // inactive cars are pooled and skipped by physics/AI
     this.yawRate = 0; // extra spin from impacts (rad/s)
     this.wheelSpin = 0;
     this.bodyRoll = 0;
     this.bodyPitch = 0;
-    this.mesh = this.#buildMesh(color);
+    const parts = buildCarMesh(model, color ?? m.paints[0]);
+    this.mesh = parts.root;
+    this.body = parts.body;
+    this.paint = parts.paint;
+    this.stripeMat = parts.stripeMat;
+    this.stripeGroup = parts.stripeGroup;
+    this.tailMat = parts.tailMat;
+    this.wheels = parts.wheels;
+    this.setStripes(stripes);
   }
 
   get speed() {
@@ -65,6 +80,25 @@ export class Car {
 
   setColor(color) {
     this.paint.color.set(color);
+  }
+
+  /** New random paint job from this model's palette (used when traffic respawns). */
+  respray(rng) {
+    this.setColor(rng.pick(this.model.paints));
+    const sc = this.model.stripeChance ?? 0;
+    this.setStripes(rng.chance(sc) ? rng.pick([0xffffff, 0x111111]) : null);
+  }
+
+  /** Undo AI detuning (e.g. once the player hijacks it). */
+  restorePerformance() {
+    this.cfg.engineAccel = this.perf.engineAccel;
+    this.cfg.maxSpeed = this.perf.maxSpeed;
+  }
+
+  /** Twin racing stripes over hood, roof and trunk; pass null to remove. */
+  setStripes(color) {
+    this.stripeGroup.visible = color != null;
+    if (color != null) this.stripeMat.color.set(color);
   }
 
   /** Turning ability (0..1) at a given forward speed: none when stopped, slightly less when fast. */
@@ -102,6 +136,9 @@ export class Car {
 
     let vF = this.velocity.dot(fwd);
     let vR = this.velocity.dot(right);
+    // Read by effects (skid marks): sideways slide speed and whether the handbrake is on.
+    this.slip = Math.abs(vR);
+    this.handbrake = !!controls.handbrake;
 
     // --- Throttle / brake / reverse ---
     this.braking = false;
@@ -224,62 +261,5 @@ export class Car {
       if (w.front) w.pivot.rotation.y = this.steer * 0.5;
     }
     this.tailMat.emissiveIntensity = this.braking ? 2.2 : 0.4;
-  }
-
-  #buildMesh(color) {
-    const root = new THREE.Group();
-    const body = new THREE.Group();
-    body.position.y = 0.45;
-    root.add(body);
-    this.body = body;
-
-    const { length: L, width: W } = this.cfg;
-    const paint = (this.paint = new THREE.MeshLambertMaterial({ color }));
-    const dark = new THREE.MeshLambertMaterial({ color: 0x1c1f26 });
-    const glass = new THREE.MeshLambertMaterial({ color: 0x23344a });
-    const add = (geo, mat, x, y, z, parent = body) => {
-      const m = new THREE.Mesh(geo, mat);
-      m.position.set(x, y, z);
-      m.castShadow = true;
-      parent.add(m);
-      return m;
-    };
-
-    add(new THREE.BoxGeometry(W, 0.6, L), paint, 0, 0.3, 0); // lower body
-    add(new THREE.BoxGeometry(W * 0.86, 0.55, L * 0.5), glass, 0, 0.87, -0.2); // cabin glass
-    add(new THREE.BoxGeometry(W * 0.8, 0.08, L * 0.42), paint, 0, 1.17, -0.25); // roof
-    add(new THREE.BoxGeometry(W * 1.02, 0.18, 0.25), dark, 0, 0.12, L / 2); // front bumper
-    add(new THREE.BoxGeometry(W * 1.02, 0.18, 0.25), dark, 0, 0.12, -L / 2); // rear bumper
-
-    const headMat = new THREE.MeshStandardMaterial({ color: 0xffffee, emissive: 0xfff6cc, emissiveIntensity: 1 });
-    this.tailMat = new THREE.MeshStandardMaterial({ color: 0x550000, emissive: 0xff1a1a, emissiveIntensity: 0.4 });
-    for (const s of [-1, 1]) {
-      add(new THREE.BoxGeometry(0.45, 0.18, 0.06), headMat, s * (W / 2 - 0.35), 0.42, L / 2 + 0.01);
-      add(new THREE.BoxGeometry(0.45, 0.18, 0.06), this.tailMat, s * (W / 2 - 0.35), 0.42, -L / 2 - 0.01);
-    }
-
-    // Wheels: pivot (steering) -> spin (rolling) -> tyre mesh
-    this.wheels = [];
-    const tyreGeo = new THREE.CylinderGeometry(0.4, 0.4, 0.32, 14).rotateZ(Math.PI / 2);
-    const tyreMat = new THREE.MeshLambertMaterial({ color: 0x15161a });
-    const hubGeo = new THREE.BoxGeometry(0.34, 0.18, 0.18);
-    const hubMat = new THREE.MeshLambertMaterial({ color: 0xb0b4bc });
-    for (const [x, z, front] of [
-      [W / 2 - 0.12, L * 0.32, true],
-      [-W / 2 + 0.12, L * 0.32, true],
-      [W / 2 - 0.12, -L * 0.32, false],
-      [-W / 2 + 0.12, -L * 0.32, false],
-    ]) {
-      const pivot = new THREE.Group();
-      pivot.position.set(x, 0.4, z);
-      const spin = new THREE.Group();
-      pivot.add(spin);
-      const tyre = new THREE.Mesh(tyreGeo, tyreMat);
-      tyre.castShadow = true;
-      spin.add(tyre, new THREE.Mesh(hubGeo, hubMat));
-      root.add(pivot);
-      this.wheels.push({ pivot, spin, front });
-    }
-    return root;
   }
 }
