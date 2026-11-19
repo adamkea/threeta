@@ -1,6 +1,7 @@
 # Threeta
 
 Top-down open-city driving game built with three.js, inspired by the overhead view of GTA: Chinatown Wars.
+You start in a silver compact hatchback, Golf-style.
 
 ## Run
 

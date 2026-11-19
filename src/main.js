@@ -53,7 +53,7 @@ scene.add(city.group);
 const world = new ColliderGrid(city.colliders);
 
 const SPAWN = { x: roadCenter(Math.floor(CITY.blocks / 2)) + 3.5, z: roadCenter(CITY.blocks / 2) + 20 };
-const playerCar = new Car({ model: 'sports', color: 0xe0281e, stripes: 0xffffff });
+const playerCar = new Car({ model: 'golf', color: 0xa8aeb6 }); // silver hatchback
 playerCar.reset(SPAWN.x, SPAWN.z, Math.PI);
 scene.add(playerCar.mesh);
 
