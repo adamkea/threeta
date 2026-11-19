@@ -111,6 +111,13 @@ html, body {
   background: radial-gradient(ellipse at center, transparent 55%, rgba(200,20,28,.85) 100%);
 }
 
+/* Build version, bottom left. */
+#version {
+  position: absolute; left: 12px; bottom: 10px;
+  font-size: 12px; font-weight: 700; color: #fff; opacity: .6;
+  -webkit-text-stroke: 1px #14110f; paint-order: stroke fill;
+}
+
 /* Weapon + ammo, bottom right (the speedo's spot, which is hidden on foot). */
 #weapon {
   position: absolute; right: 24px; bottom: 20px; text-align: right;
@@ -119,6 +126,11 @@ html, body {
   text-shadow: 3px 3px 0 #14110f;
 }
 #weapon .name { display: block; font-size: 18px; color: #fff; letter-spacing: .5px; text-transform: uppercase; }
+#weapon .row { display: flex; align-items: center; justify-content: flex-end; gap: 10px; }
+#weapon .icon { display: block; width: 72px; height: 36px; color: #ffd23a; filter: drop-shadow(3px 3px 0 #14110f); }
+#weapon .icon svg { display: block; width: 100%; height: 100%; overflow: visible; }
+#weapon.holstered .icon { color: #fff; opacity: .7; }
+#weapon.empty .icon, #weapon.empty .ammo { color: #ff5a4a; }
 #weapon .ammo { display: block; font-size: 44px; color: #ffd23a; line-height: 1; }
 #weapon .ammo small { font-size: 18px; margin-left: 4px; opacity: .85; }
 #weapon.holstered .name { opacity: .7; }
