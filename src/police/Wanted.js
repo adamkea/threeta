@@ -20,6 +20,7 @@ export const CRIMES = {
   shootCop: 160,
   killCop: 260,
   shootPoliceCar: 30,
+  destroyPoliceCar: 140, // blowing one up
 };
 
 export class Wanted {

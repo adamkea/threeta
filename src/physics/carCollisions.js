@@ -1,9 +1,16 @@
 /**
  * Resolves car-vs-car overlaps (each car = two circles) with an equal-mass impulse,
  * plus a bit of spin so glancing hits rotate the cars. `onHit(a, b, impulse)` is told about
- * every impact (used to spot the player ramming police).
+ * every impact (used to spot the player ramming police). Both cars take crash damage from the
+ * hardest hit each suffered this step (see VehicleDamage.impact).
  */
+const hardest = new Map(); // car -> { dv, by }
 export function resolveCarCollisions(cars, restitution = 0.3, onHit = null) {
+  hardest.clear();
+  const note = (car, dv, by) => {
+    const h = hardest.get(car);
+    if (!h || dv > h.dv) hardest.set(car, { dv, by });
+  };
   for (let i = 0; i < cars.length; i++) {
     const a = cars[i];
     for (let j = i + 1; j < cars.length; j++) {
@@ -32,6 +39,8 @@ export function resolveCarCollisions(cars, restitution = 0.3, onHit = null) {
           b.velocity.x += nx * jImp;
           b.velocity.y += nz * jImp;
           onHit?.(a, b, jImp);
+          note(a, jImp, b);
+          note(b, jImp, a);
 
           // Torque about +Y: tau = lz*Fx - lx*Fz, with lever from car centre to contact.
           const cx = (ax + bx) / 2;
@@ -43,4 +52,5 @@ export function resolveCarCollisions(cars, restitution = 0.3, onHit = null) {
       }
     }
   }
+  for (const [car, { dv, by }] of hardest) car.damage.impact(dv, by);
 }
