@@ -95,6 +95,24 @@ export const MODELS = {
     paints: [0x17181c],
     damage: { hp: 850 }, // reinforced for ramming
   },
+  // Sports motorbike: two wheels, a rider you can see, leans into corners. Light (it comes off
+  // worst in any crash, and a hard one throws the rider off), quick, and fragile. Built by
+  // buildBikeMesh rather than the car body builder; `bike: true` switches the physics too.
+  motorbike: {
+    bike: true,
+    cfg: {
+      length: 2.2, width: 0.8, maxSpeed: 42, engineAccel: 28, brakeDecel: 34, reverseAccel: 4, maxReverse: 3,
+      drag: 0.3, grip: 12, handbrakeGrip: 2.2, steerRate: 3.0, steerResponse: 10, restitution: 0.15,
+      mass: 0.3, // vs 1 for a car: bounces off cars instead of shoving them
+    },
+    wheelR: 0.33,
+    wheelZ: 0.33,
+    paints: [0xe0281e, 0x2f6fd0, 0x111216, 0xf4f4f0, 0x9bd43a, 0xf27a1a, 0xffc414, 0x8a3fc4],
+    jackets: [0x17181c, 0x2a2b2f, 0x6b3f22, 0x7a2430, 0x2a4b7c, 0x3f6b3a],
+    helmets: [0xf4f4f0, 0x111216, 0xe0281e, 0xffc414, 0x2f6fd0, 0xb7c0ca],
+    stripeChance: 0.5,
+    damage: { hp: 320, engine: 0 }, // engine under the tank, mid-bike
+  },
 };
 
 /** Weighted pick for traffic. */
@@ -106,6 +124,7 @@ const TRAFFIC_MIX = [
   ['pickup', 12],
   ['sports', 8],
   ['police', 4],
+  ['motorbike', 7],
   ['supercar', 1], // about 1% of traffic: a lucky find
 ];
 export function randomModel(rng) {
@@ -255,6 +274,7 @@ const plane = (w, h) => new THREE.PlaneGeometry(w, h);
  */
 export function buildCarMesh(name, color) {
   const m = MODELS[name];
+  if (m.bike) return buildBikeMesh(name, m, color);
   const { g, L, W, T, base, pts, cabinW, R } = geometryFor(name, m);
   const S = sharedAssets();
   const c = m.cabin;
@@ -439,6 +459,159 @@ export function buildCarMesh(name, color) {
     wheels: wheels.map((w) => ({ ...w, tyre: boneFor(w.tyre) })),
     siren: siren && { red: colors(siren.red), blue: colors(siren.blue) },
     loose: loose.map(boneFor),
+  };
+}
+
+/**
+ * A motorbike and its rider. Same pieces as a car (see buildCarMesh), plus `rider` (a bone:
+ * shown only while someone is riding), `riderJacket` / `helmet` colours, and the wheel radius.
+ * Everything, wheels included, hangs off `body`, whose origin is on the ground under the bike's
+ * centre, so rolling `body` leans the whole bike over on its tyres.
+ */
+function buildBikeMesh(name, m, color) {
+  const S = sharedAssets();
+  const { length: L, width: W } = m.cfg;
+  const R = m.wheelR;
+  const wz = m.wheelZ * L;
+
+  const root = new THREE.Group();
+  const body = new THREE.Group();
+  root.add(body);
+  const paint = toon({ color });
+  const stripeMat = toon({ color: 0xffffff });
+  const jacket = toon({ color: m.jackets[0] });
+  const helmet = toon({ color: m.helmets[0] });
+  const pants = toon({ color: 0x23262e });
+  const tailMat = new THREE.MeshStandardMaterial({ color: 0x550000, emissive: 0xff1a1a, emissiveIntensity: 0.4 });
+  const headMat = S.head.clone();
+  headMat.userData = {};
+  const loose = [];
+
+  const add = (geo, mat, x, y, z, parent = body, shadow = true) => {
+    const mesh = new THREE.Mesh(geo, mat);
+    mesh.position.set(x, y, z);
+    mesh.castShadow = shadow;
+    parent.add(mesh);
+    return mesh;
+  };
+  const looseAdd = (...args) => {
+    const mesh = add(...args);
+    loose.push(mesh);
+    return mesh;
+  };
+  const rbox = (w, h, d, r = 0.05) => new RoundedBoxGeometry(w, h, d, 2, r);
+  /** Box running from a to b ([y, z] in the parent's space) at side offset x. */
+  const beam = (a, b, x, size, mat, parent = body) => {
+    const dy = b[0] - a[0], dz = b[1] - a[1];
+    const mesh = add(new THREE.BoxGeometry(size, size, Math.hypot(dy, dz) + size), mat, x, (a[0] + b[0]) / 2, (a[1] + b[1]) / 2, parent);
+    mesh.rotation.x = Math.atan2(-dy, dz);
+    return mesh;
+  };
+
+  const blob = add(plane(W + 0.7, L + 0.6).rotateX(-Math.PI / 2), S.blob, 0, 0.035, 0, root, false);
+  blob.renderOrder = 1;
+
+  // --- Frame, engine, bodywork ---
+  add(rbox(0.36, 0.34, 0.62, 0.06), S.dark, 0, 0.42, 0.02); // engine block
+  add(rbox(0.3, 0.1, 0.5, 0.04), S.grille, 0, 0.24, 0.05); // sump
+  for (const s of [-1, 1]) beam([R, -wz], [0.5, -0.05], s * 0.12, 0.06, S.dark); // swingarm
+  beam([0.36, 0.28], [0.32, -0.85], 0.2, 0.09, S.chrome); // exhaust
+  add(new THREE.CylinderGeometry(0.075, 0.09, 0.32, 10).rotateX(Math.PI / 2), S.chrome, 0.22, 0.42, -0.86); // silencer
+  add(rbox(0.44, 0.26, 0.62, 0.1), paint, 0, 0.78, 0.18); // tank
+  add(rbox(0.34, 0.12, 0.62, 0.05), S.dark, 0, 0.78, -0.36); // seat
+  const tail = add(rbox(0.3, 0.16, 0.42, 0.06), paint, 0, 0.84, -0.78); // tail cowl
+  tail.rotation.x = -0.18;
+  for (const s of [-1, 1]) add(rbox(0.06, 0.34, 0.5, 0.03), paint, s * 0.2, 0.6, 0.1); // side panels
+  const fairing = add(rbox(0.5, 0.44, 0.3, 0.12), paint, 0, 0.95, 0.66);
+  fairing.rotation.x = -0.35;
+  const screen = add(rbox(0.36, 0.2, 0.05, 0.02), S.glass, 0, 1.2, 0.6);
+  screen.rotation.x = -0.6;
+  add(rbox(0.2, 0.14, 0.06, 0.04), headMat, 0, 0.92, 0.82); // headlight
+  add(rbox(0.18, 0.07, 0.05, 0.02), tailMat, 0, 0.86, -1.0); // tail light
+  for (const s of [-1, 1]) {
+    add(new THREE.BoxGeometry(0.08, 0.05, 0.05), S.indicator, s * 0.24, 0.9, 0.76, body, false);
+    add(new THREE.BoxGeometry(0.08, 0.05, 0.05), S.indicator, s * 0.16, 0.8, -1.0, body, false);
+  }
+  const plate = looseAdd(plane(0.26, 0.16), S.plate, 0, 0.66, -1.02, body, false);
+  plate.rotation.y = Math.PI;
+  looseAdd(rbox(0.3, 0.06, 0.4, 0.03), paint, 0, R + 0.32, -wz + 0.08); // rear hugger
+
+  // Stripe down the middle of the tank and tail.
+  const stripeGroup = new THREE.Group();
+  body.add(stripeGroup);
+  const stripe = (len, y, z, tilt = 0) => {
+    const d = add(plane(0.12, len).rotateX(-Math.PI / 2), stripeMat, 0, y, z, stripeGroup, false);
+    d.rotation.x = tilt;
+  };
+  stripe(0.5, 0.913, 0.18);
+  stripe(0.32, 0.925, -0.78, -0.18);
+
+  // --- Wheels: front pivot steers (fork, mudguard, bars and mirrors turn with it) ---
+  const wheels = [];
+  const tyreGeo = new THREE.CylinderGeometry(R, R, 0.16, 20).rotateZ(Math.PI / 2);
+  const rimGeo = new THREE.CylinderGeometry(R * 0.66, R * 0.66, 0.17, 14).rotateZ(Math.PI / 2);
+  const hubGeo = new THREE.CylinderGeometry(R * 0.2, R * 0.2, 0.2, 8).rotateZ(Math.PI / 2);
+  const spokeGeo = new THREE.BoxGeometry(0.18, R * 1.2, 0.05);
+  let frontPivot = null;
+  for (const [z, front] of [[wz, true], [-wz, false]]) {
+    const pivot = new THREE.Group();
+    pivot.position.set(0, R, z);
+    const spin = new THREE.Group();
+    pivot.add(spin);
+    const tyre = new THREE.Mesh(tyreGeo, S.tyre);
+    tyre.castShadow = true;
+    const disc = new THREE.Mesh(new THREE.CylinderGeometry(R * 0.5, R * 0.5, 0.2, 12).rotateZ(Math.PI / 2), S.chrome); // brake disc
+    spin.add(tyre, new THREE.Mesh(rimGeo, S.rim), new THREE.Mesh(hubGeo, S.chrome), new THREE.Mesh(spokeGeo, S.rim), disc);
+    disc.scale.set(0.3, 1, 1);
+    body.add(pivot);
+    wheels.push({ pivot, spin, front, tyre });
+    if (front) frontPivot = pivot;
+  }
+  // In the front pivot's space: origin at the front axle.
+  for (const s of [-1, 1]) beam([0, 0], [0.62, -0.2], s * 0.1, 0.06, S.chrome, frontPivot); // fork legs
+  add(rbox(0.22, 0.06, 0.46, 0.03), paint, 0, R + 0.06, 0.02, frontPivot); // front mudguard
+  add(new THREE.BoxGeometry(0.72, 0.05, 0.05), S.dark, 0, 0.7, -0.26, frontPivot); // handlebar
+  for (const s of [-1, 1]) {
+    add(new THREE.BoxGeometry(0.04, 0.16, 0.04), S.dark, s * 0.3, 0.8, -0.2, frontPivot);
+    looseAdd(rbox(0.14, 0.08, 0.05, 0.02), S.dark, s * 0.3, 0.9, -0.18, frontPivot); // mirrors
+  }
+
+  // --- Rider (hidden while nobody is on it): crouched over the tank, hands on the bars ---
+  const rider = new THREE.Group();
+  body.add(rider);
+  const gloves = S.dark;
+  for (const s of [-1, 1]) {
+    beam([0.92, -0.34], [0.86, 0.08], s * 0.17, 0.17, pants, rider); // thigh
+    beam([0.86, 0.08], [0.4, -0.08], s * 0.24, 0.14, pants, rider); // shin
+    add(rbox(0.12, 0.1, 0.26, 0.04), S.dark, s * 0.25, 0.36, -0.02, rider); // boot on the peg
+    beam([1.4, -0.06], [1.04, 0.42], s * 0.25, 0.13, jacket, rider); // arm
+    add(rbox(0.1, 0.1, 0.12, 0.04), gloves, s * 0.29, 1.0, 0.46, rider);
+  }
+  const torso = add(rbox(0.46, 0.6, 0.3, 0.1), jacket, 0, 1.18, -0.2, rider);
+  torso.rotation.x = 0.75; // leaning forward over the tank
+  add(new THREE.SphereGeometry(0.2, 14, 10), helmet, 0, 1.52, 0.1, rider);
+  const visor = add(rbox(0.3, 0.12, 0.14, 0.05), S.glass, 0, 1.52, 0.24, rider);
+  visor.rotation.x = 0.3;
+
+  const toggles = [...loose, ...wheels.map((w) => w.tyre)];
+  const bones = [root, body, stripeGroup, rider, frontPivot, ...wheels.map((w) => w.spin)];
+  const { colors, boneFor } = bakeCar(name, root, bones, toggles, L, W);
+  return {
+    root,
+    body,
+    paint: colors(paint),
+    roofPaint: colors(paint),
+    stripeMat: colors(stripeMat),
+    stripeGroup,
+    tailMat,
+    headMat,
+    wheels: wheels.map((w) => ({ ...w, tyre: boneFor(w.tyre) })),
+    siren: null,
+    loose: loose.map(boneFor),
+    rider,
+    riderJacket: colors(jacket),
+    helmet: colors(helmet),
+    wheelR: R,
   };
 }
 

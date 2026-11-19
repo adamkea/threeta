@@ -30,7 +30,12 @@ const DEFAULTS = {
   width: 2.0,
   collisionRadius: 1.05,
   restitution: 0.25,
+  mass: 1, // relative, for car-vs-car impulses (a motorbike is much lighter)
 };
+
+const LEAN_MAX = 0.85; // rad: how far a bike can lean into a corner
+const KICKSTAND_LEAN = -0.2; // parked bikes rest leaning to their left
+const TOPPLED_LEAN = 1.4; // lying on its side
 
 /**
  * Arcade car with top-down 2D physics on the XZ plane.
@@ -64,6 +69,15 @@ export class Car {
     this.overboard = false;
     this.y = 0;
     this.vy = 0;
+    // Hardest crash (change in velocity, m/s) since the world last checked, and the velocity
+    // at the start of the step it happened in (riders get thrown off bikes with it).
+    this.jolt = 0;
+    this.preVel = new THREE.Vector2();
+    // Motorbikes: is someone on it (shows the rider; set by the world each step), and has it
+    // been dropped on its side (it stays down until someone picks it up)?
+    this.isBike = !!m.bike;
+    this.ridden = false;
+    this.toppled = 0; // 0 = upright, else -1 / 1 = lying on its left / right side
     const parts = buildCarMesh(model, color ?? m.paints[0]);
     this.mesh = parts.root;
     this.body = parts.body;
@@ -76,6 +90,12 @@ export class Car {
     this.wheels = parts.wheels;
     this.loose = parts.loose; // parts that can fall off in a crash
     this.sirenMats = parts.siren; // null unless the model has a lightbar
+    this.riderBone = parts.rider ?? null; // bikes only
+    this.riderJacket = parts.riderJacket ?? null;
+    this.helmet = parts.helmet ?? null;
+    this.wheelR = parts.wheelR ?? 0.4;
+    if (this.riderBone) showBone(this.riderBone, false); // nobody on it yet
+    if (this.isBike) this.bodyRoll = KICKSTAND_LEAN;
     this.siren = false; // flashing lights on (police in pursuit)
     // Undamaged colours: damage tints from these (see VehicleDamage.refreshLook).
     this.baseColor = this.paint.color.clone();
@@ -129,6 +149,21 @@ export class Car {
     this.yawRate = 0;
     this.overboard = false;
     this.y = this.vy = this.bodyPitch = 0;
+    this.toppled = 0;
+    this.bodyRoll = this.isBike ? KICKSTAND_LEAN : 0;
+  }
+
+  /** Bikes: someone gets on (picking it up if it was lying down) or off. */
+  setRidden(on) {
+    if (on === this.ridden) return;
+    this.ridden = on;
+    if (on) this.toppled = 0;
+    if (this.riderBone) showBone(this.riderBone, on);
+  }
+
+  /** Bikes: knocked over (rider thrown, burnt out). It lies on the side it was leaning toward. */
+  topple() {
+    if (this.isBike && !this.toppled) this.toppled = this.bodyRoll > 0 ? 1 : -1;
   }
 
   /** Under the surface: the car is lost (and anyone inside it). */
@@ -146,6 +181,13 @@ export class Car {
     this.setColor(rng.pick(this.model.paints));
     const sc = this.model.stripeChance ?? 0;
     this.setStripes(rng.chance(sc) ? rng.pick([0xffffff, 0x111111]) : null);
+    if (this.isBike) this.dressRider(rng.pick(this.model.jackets), rng.pick(this.model.helmets));
+  }
+
+  /** Bikes: the rider's jacket and helmet colours. */
+  dressRider(jacket, helmet) {
+    this.riderJacket?.color.set(jacket);
+    if (helmet != null) this.helmet?.color.set(helmet);
   }
 
   /** Undo AI detuning (e.g. once the player hijacks it). */
@@ -192,12 +234,14 @@ export class Car {
    */
   update(dt, controls, world) {
     if (!this.overboard && offIsland(this.position.x, this.position.y)) this.overboard = true;
+    this.preVel.copy(this.velocity);
     this.damage.update(dt);
     if (this.overboard) return this.#fall(dt);
     const c = this.cfg;
     // Damage saps the engine and steering; a wreck gets no input at all.
     const dmg = this.damage.state;
-    if (dmg.destroyed) controls = WRECKED;
+    if (dmg.destroyed) this.topple();
+    if (dmg.destroyed || this.toppled) controls = WRECKED;
     const maxSpeed = c.maxSpeed * Math.max(0.05, dmg.power);
     const engineAccel = c.engineAccel * dmg.power;
     // The pre-turn frame, held through the step (copies: the cached vectors follow the heading).
@@ -238,6 +282,7 @@ export class Car {
       this.braking = true;
     }
     if (dmg.destroyed) vF *= Math.exp(-2.5 * dt); // burnt tyres: it scrapes to a halt
+    if (this.toppled) vF *= Math.exp(-1.8 * dt); // a dropped bike slides along on its side
     vF = THREE.MathUtils.clamp(vF, -c.maxReverse, Math.max(maxSpeed, c.maxSpeed * 0.3));
 
     // --- Lateral grip (low grip under handbrake = drift) ---
@@ -248,6 +293,7 @@ export class Car {
     this.steer += (controls.steer - this.steer) * Math.min(1, c.steerResponse * dt);
     // Need some speed to turn; turning gets a little less sharp at high speed.
     const drift = controls.handbrake ? 1.35 : 1;
+    const h0 = this.heading;
     this.heading += this.steer * c.steerRate * dmg.steer * this.speedFactor(vF) * drift * Math.sign(vF) * dt;
     this.heading += this.yawRate * dt;
     this.yawRate *= Math.exp(-3 * dt);
@@ -261,11 +307,27 @@ export class Car {
     this.#collide(world);
 
     // --- Visual state ---
-    this.wheelSpin += (vF * dt) / 0.4;
+    this.wheelSpin += (vF * dt) / this.wheelR;
     const accel = (this.velocity.dot(fwd) - prevVel.dot(fwd)) / dt;
     this.bodyPitch += (THREE.MathUtils.clamp(-accel * 0.004, -0.06, 0.06) - this.bodyPitch) * Math.min(1, 6 * dt);
+    if (this.isBike) return this.#lean(dt, vF, (this.heading - h0) / dt);
     const lateral = this.steer * Math.abs(vF) * 0.004 + vR * 0.01;
     this.bodyRoll += (THREE.MathUtils.clamp(lateral, -0.08, 0.08) - this.bodyRoll) * Math.min(1, 6 * dt);
+  }
+
+  /**
+   * Bikes lean into corners (by the angle that balances the turn: tan lean = v·ω / g), stand on
+   * the kickstand when parked, and lie flat once dropped. Pitch stays flat: no nose-dive under
+   * braking on two wheels. Positive roll leans the bike to its right.
+   */
+  #lean(dt, vF, yaw) {
+    let target;
+    if (this.toppled) target = this.toppled * TOPPLED_LEAN;
+    else if (!this.ridden && Math.abs(vF) < 1) target = KICKSTAND_LEAN;
+    else target = THREE.MathUtils.clamp(-Math.atan((vF * yaw) / 9.81), -LEAN_MAX, LEAN_MAX);
+    const rate = this.toppled ? 7 : 5;
+    this.bodyRoll += (target - this.bodyRoll) * Math.min(1, rate * dt);
+    this.bodyPitch *= Math.exp(-8 * dt);
   }
 
   /** Off the edge: no grip, no control. Momentum carries it out, the nose drops, then it sinks. */
@@ -356,7 +418,7 @@ export class Car {
     this.body.rotation.set(this.bodyPitch + d.sag.pitch, 0, this.bodyRoll + d.sag.roll);
     for (const w of this.wheels) {
       w.spin.rotation.x = this.wheelSpin;
-      if (w.front) w.pivot.rotation.y = this.steer * 0.5;
+      if (w.front) w.pivot.rotation.y = this.steer * (this.isBike ? 0.35 : 0.5);
     }
     this.tailMat.emissiveIntensity = d.destroyed ? 0 : this.braking ? 2.2 : 0.4;
     if (this.sirenMats) {

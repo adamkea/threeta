@@ -66,6 +66,7 @@ export class NpcManager {
     // Veer a little so they don't all run in perfectly straight lines.
     away.rotateAround(STAND, this.rng.range(-0.5, 0.5));
     this.#flee(n, away, 5);
+    return n.ped;
   }
 
   /**

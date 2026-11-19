@@ -55,6 +55,7 @@ export class SkidMarks {
     const { length: L, width: W } = car.cfg;
     const f = car.forward, r = car.right;
     const back = -L * 0.3, side = W / 2 - 0.14;
+    if (car.isBike) return [new THREE.Vector2(car.position.x + f.x * back, car.position.y + f.y * back)];
     return [-1, 1].map((s) => new THREE.Vector2(
       car.position.x + f.x * back + r.x * side * s,
       car.position.y + f.y * back + r.y * side * s,
@@ -74,7 +75,7 @@ export class SkidMarks {
         this.trails.set(car, wheels);
         continue;
       }
-      for (let k = 0; k < 2; k++) {
+      for (let k = 0; k < wheels.length; k++) {
         const a = last[k], b = wheels[k];
         const d = a.distanceTo(b);
         if (d < STEP) continue;
