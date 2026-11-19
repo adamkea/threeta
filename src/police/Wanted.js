@@ -30,7 +30,7 @@ export class Wanted {
 
   /** Seconds out of sight before the police give up, at the current level. */
   get evadeTime() {
-    return 9 + this.stars * 3;
+    return 7 + this.stars * 2;
   }
 
   /** 0..1 progress toward losing the police (for the HUD). */

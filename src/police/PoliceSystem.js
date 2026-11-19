@@ -14,7 +14,8 @@ const DEPLOY_RANGE = 13; // officer jumps out when the car is this close to a sl
 const BUST_RANGE = 1.5; // cop this close to a person on foot is making the arrest
 const BUST_TIME = 0.9; // seconds of contact needed
 const COP_RUN = 1.08; // cops run slightly faster than the player, so a foot chase can be lost only by breaking sight
-const HEAR_RANGE = 30; // a chasing car this close keeps track of the player even without a clear view
+const HEAR_RANGE = 18; // a chasing car this close keeps track of the player even without a clear view
+const DISPATCH_EVERY = 5; // seconds between radio updates of the player's position to units that lost sight
 const SPAWN_MIN = 65; // just outside the camera's view
 const SPAWN_MAX = 115;
 const DESPAWN = 240;
@@ -126,10 +127,25 @@ export class PoliceSystem {
         car.siren = true;
         // Faster at higher wanted levels, with a burst of catch-up speed when far behind.
         // Close in they're a match for a sports car (so you can still shake them with good driving).
-        const far = dist > 45;
-        car.cfg.maxSpeed = far ? 48 : 35 + wanted.stars;
-        car.cfg.engineAccel = far ? 30 : 21 + wanted.stars;
-        controls = u.driver.update(dt, target, world, playerSlow ? 7 : 0);
+        // Even flat out they only just match the quickest cars, so good driving loses them.
+        const far = dist > 60;
+        car.cfg.maxSpeed = far ? 36 : 29 + wanted.stars;
+        car.cfg.engineAccel = far ? 23 : 17 + wanted.stars;
+        // Units only know where the player is while they can see (or hear) them; otherwise they
+        // head for the last sighting, refreshed now and then by dispatch.
+        u.dispatch -= dt;
+        if (dist < HEAR_RANGE || this.#sees(car.position, tp, CAR_SIGHT, world)) {
+          u.lastKnown.copy(tp);
+          u.lastVel.copy(target.velocity);
+          u.dispatch = DISPATCH_EVERY;
+        } else if (u.dispatch <= 0) {
+          u.lastKnown.copy(tp);
+          u.lastVel.set(0, 0);
+          u.dispatch = DISPATCH_EVERY;
+        }
+        u.ghost.position = u.lastKnown;
+        u.ghost.velocity = u.lastVel;
+        controls = u.driver.update(dt, u.ghost, world, playerSlow ? 7 : 0);
         // Close to a stopped (or on-foot) suspect: an officer gets out to make the arrest.
         if (playerSlow && dist < DEPLOY_RANGE && car.speed < 3 && u.cooldown === 0 && u.driver.direct) {
           const side = car.right.multiplyScalar(-(car.cfg.width / 2 + 0.8));
@@ -229,7 +245,7 @@ export class PoliceSystem {
     const idle = this.units.find((u) => u.state === 'idle');
     if (chasing < UNITS_BY_STARS[wanted.stars]) {
       // Re-task a stood-down car nearby before calling in a new one.
-      if (idle) (idle.state = 'chase'), (idle.driver = new PursuitDriver(idle.car));
+      if (idle) (idle.state = 'chase'), (idle.driver = new PursuitDriver(idle.car)), (idle.dispatch = 0);
       else this.#trySpawn(player.body, allCars);
     }
   }
@@ -238,7 +254,19 @@ export class PoliceSystem {
     car.active = true;
     car.mesh.visible = true;
     car.ai = null;
-    const u = { car, driver: new PursuitDriver(car), state: 'chase', officer: null, cooldown: 0, returning: false, boardSpot: new THREE.Vector2() };
+    const u = {
+      car,
+      driver: new PursuitDriver(car),
+      state: 'chase',
+      officer: null,
+      cooldown: 0,
+      returning: false,
+      boardSpot: new THREE.Vector2(),
+      lastKnown: new THREE.Vector2(Infinity, Infinity), // filled on the first step
+      lastVel: new THREE.Vector2(),
+      dispatch: 0,
+      ghost: { position: null, velocity: null },
+    };
     this.units.push(u);
     return u;
   }
