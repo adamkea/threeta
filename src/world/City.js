@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { createRng } from '../core/random.js';
 import { toon } from '../render/toon.js';
 import { createLandmark } from './Landmarks.js';
-import { CITY, LAYOUT, LOT, WATER_Y, blockAt, groundHeight, offIsland } from './CityLayout.js';
+import { CITY, LAYOUT, LOT, WATER_Y, blockAt, groundHeight, offIsland, toWorld } from './CityLayout.js';
 import {
   bounds, centroid, clipHalfPlane, insideConvex, isAxisRect, offsetConvex, offsetConvexPaired, signedArea,
 } from './geom.js';
@@ -46,7 +46,7 @@ export function createCity(seed = 1337) {
     else if (b.use === 'park') parks.push(b);
   }
   for (const l of LAYOUT.landmarks) {
-    const lm = createLandmark(l.kind, l.cx, l.cz, CITY.curbHeight, { colliders, windowTex });
+    const lm = createLandmark(l.kind, l.cx, l.cz, CITY.curbHeight, { colliders, windowTex, angle: l.angle });
     group.add(lm.group);
     landmarks.push(lm);
     buildings.push({ ...lm.footprint, color: lm.color });
@@ -99,49 +99,78 @@ const rectPoly = (minX, minZ, maxX, maxZ) => [
 ];
 
 /**
- * Parking lots: a sidewalk ring with driveways, painted bays, and a "P" sign. Returns the
- * meshes and every bay as a parking spot { x, z, heading } (heading faces nose-in or out).
+ * Parking lots: a paved rectangle in the block's own frame, with driveways along both aisles out
+ * to the streets either side, painted bays and a "P" sign. The rest of the block is sidewalk.
+ * Returns the meshes and every bay as a parking spot { x, z, heading } (nose-in or out).
  */
 function createParkingLots(rng, slabs, colliders) {
   const g = new THREE.Group();
   const spots = [];
-  const lines = []; // [x, z, width, length] painted strips running along Z
-  const s = CITY.sidewalk, h = CITY.curbHeight;
+  const lines = []; // [x, z, width, length, ux, uz]: painted strips, length along (ux, uz)
+  const h = CITY.curbHeight;
 
   for (const lot of LAYOUT.lots) {
-    const { x0, z0, w: bw, d: bd, bays, bx0, rows } = lot;
-    const [[a0, a1], [b0, b1]] = lot.aisles;
-    // Sidewalk ring in lot-local rects [minX, minZ, maxX, maxZ], with gaps where the aisles exit.
-    const ring = [
-      [0, 0, bw, s],
-      [0, bd - s, bw, bd],
+    const block = LAYOUT.blocks[lot.block];
+    const { cx, cz, hw, hd, bays, bx0, rows, aisles } = lot;
+    const at = (lx, lz) => toWorld(lot, cx, cz, lx, lz);
+    const vx = -lot.uz, vz = lot.ux; // local +Z in world
+
+    // Sidewalk = block minus the paving and the two driveway bands. Cut it into convex pieces
+    // with half-planes in the lot's frame: n·(p - o) <= 0 keeps the side away from n.
+    const keep = (poly, lx, lz, nx, nz) => {
+      if (!poly) return null;
+      const o = at(lx, lz);
+      return clipHalfPlane(poly, o.x, o.z, nx * lot.ux + nz * vx, nx * lot.uz + nz * vz);
+    };
+    const pieces = [
+      keep(block.shape, 0, -hd, 0, 1), // north of the paving
+      keep(block.shape, 0, hd, 0, -1), // south of it
     ];
-    for (const [xa, xb] of [[0, s], [bw - s, bw]]) ring.push([xa, s, xb, a0], [xa, a1, xb, b0], [xa, b1, xb, bd - s]);
-    for (const [ax, az, bx, bz] of ring) extrudeSlab(slabs, rectPoly(x0 + ax, z0 + az, x0 + bx, z0 + bz), 0, h);
+    const bands = [[-hd, aisles[0][0]], [aisles[0][1], aisles[1][0]], [aisles[1][1], hd]];
+    for (const [z0, z1] of bands) {
+      const band = keep(keep(block.shape, 0, z0, 0, -1), 0, z1, 0, 1);
+      pieces.push(keep(band, -hw, 0, 1, 0), keep(band, hw, 0, -1, 0)); // west and east of the paving
+    }
+    for (const p of pieces) if (p && signedArea(p) > 0.5) extrudeSlab(slabs, p, 0, h);
 
     for (const row of rows) {
       const depth = row.z1 - row.z0;
-      const zc = z0 + (row.z0 + row.z1) / 2;
-      for (let k = 0; k <= bays; k++) lines.push([x0 + bx0 + k * LOT.bayWidth, zc, 0.15, depth]);
+      const zc = (row.z0 + row.z1) / 2;
+      for (let k = 0; k <= bays; k++) {
+        const p = at(bx0 + k * LOT.bayWidth, zc);
+        lines.push([p.x, p.z, 0.15, depth, vx, vz]);
+      }
       for (let k = 0; k < bays; k++) {
         const nose = rng.chance(0.75) ? row.nose : -row.nose; // most drivers park nose-in
-        spots.push({ x: x0 + bx0 + (k + 0.5) * LOT.bayWidth, z: zc, heading: nose > 0 ? 0 : Math.PI });
+        const p = at(bx0 + (k + 0.5) * LOT.bayWidth, zc);
+        spots.push({ x: p.x, z: p.z, heading: lot.angle + (nose > 0 ? 0 : Math.PI) });
       }
     }
     // Line down the back of the middle double row, and along the inside of each edge row.
     const width = bays * LOT.bayWidth;
-    for (const z of [rows[0].z1 - 0.1, rows[1].z1, rows[3].z0 + 0.1]) lines.push([x0 + bx0 + width / 2, z0 + z, width, 0.15]);
+    for (const z of [rows[0].z1 - 0.1, rows[1].z1, rows[3].z0 + 0.1]) {
+      const p = at(bx0 + width / 2, z);
+      lines.push([p.x, p.z, 0.15, width, lot.ux, lot.uz]);
+    }
 
-    // "P" sign on the sidewalk between the two west driveways.
-    const sx = x0 + s / 2, sz = z0 + (a1 + b0) / 2;
-    g.add(createParkingSign(sx, sz));
-    colliders.push({ minX: sx - 0.15, maxX: sx + 0.15, minZ: sz - 0.15, maxZ: sz + 0.15 });
+    // "P" sign on the sidewalk west of the paving, between the driveways (if there's room).
+    const sp = at(-hw - 1.5, (aisles[0][1] + aisles[1][0]) / 2);
+    if (insideConvex(block.shape, sp.x, sp.z, -0.5)) {
+      g.add(createParkingSign(sp.x, sp.z));
+      colliders.push({ minX: sp.x - 0.15, maxX: sp.x + 0.15, minZ: sp.z - 0.15, maxZ: sp.z + 0.15 });
+    }
   }
 
   if (lines.length) {
     const mesh = new THREE.InstancedMesh(new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2), toon({ color: 0xeeeae0 }), lines.length);
     const m = new THREE.Matrix4();
-    lines.forEach(([x, z, w, l], i) => mesh.setMatrixAt(i, m.makeScale(w, 1, l).setPosition(x, 0.02, z)));
+    const q = new THREE.Quaternion();
+    const up = new THREE.Vector3(0, 1, 0);
+    lines.forEach(([x, z, w, l, ux, uz], i) => {
+      q.setFromAxisAngle(up, Math.atan2(ux, uz));
+      m.compose(new THREE.Vector3(x, 0.02, z), q, new THREE.Vector3(w, 1, l));
+      mesh.setMatrixAt(i, m);
+    });
     mesh.receiveShadow = true;
     g.add(mesh);
   }

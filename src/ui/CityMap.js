@@ -108,7 +108,7 @@ export class CityMap {
       path(inner);
       g.fill();
     }
-    this.drawLots(g, size, s, rect);
+    this.drawLots(g, size, s, path);
 
     g.lineWidth = Math.max(1, 0.35 * s);
     g.strokeStyle = INK;
@@ -165,26 +165,30 @@ export class CityMap {
   }
 
   /** Parking lots: road-coloured with bay lines and a big "P" so they're easy to find. */
-  drawLots(g, size, s, rect) {
-    const i = CITY.sidewalk;
+  drawLots(g, size, s, path) {
     for (const lot of this.city.lots) {
-      const { x0, z0, w, d } = lot;
-      g.fillStyle = SIDEWALK;
-      g.fillRect(...rect(x0, z0, x0 + w, z0 + d));
+      // Draw in the lot's own frame: metres, local +X along (ux, uz).
+      const [ox, oy] = this.toPx(lot.cx, lot.cz, size);
+      g.save();
+      path(this.city.blocks[lot.block].shape);
+      g.clip();
+      g.translate(ox, oy);
+      g.transform(lot.ux * s, lot.uz * s, -lot.uz * s, lot.ux * s, 0, 0);
       g.fillStyle = ROAD;
-      g.fillRect(...rect(x0 + i, z0 + i, x0 + w - i, z0 + d - i));
-      for (const [a, b] of lot.aisles) g.fillRect(...rect(x0, z0 + a, x0 + w, z0 + b));
+      g.fillRect(-lot.hw, -lot.hd, lot.hw * 2, lot.hd * 2);
+      for (const [a, b] of lot.aisles) g.fillRect(-lot.hw - 12, a, lot.hw * 2 + 24, b - a);
       g.strokeStyle = 'rgba(238,234,224,0.7)';
-      g.lineWidth = Math.max(1, 0.2 * s);
+      g.lineWidth = 0.2;
       g.beginPath();
       for (const row of lot.rows) {
         for (let k = 0; k <= lot.bays; k++) {
-          const [px, py] = this.toPx(x0 + lot.bx0 + k * LOT.bayWidth, z0 + row.z0, size);
-          g.moveTo(px, py), g.lineTo(px, py + (row.z1 - row.z0) * s);
+          const x = lot.bx0 + k * LOT.bayWidth;
+          g.moveTo(x, row.z0), g.lineTo(x, row.z1);
         }
       }
       g.stroke();
-      const [cx, cy] = this.toPx(x0 + w / 2, z0 + d / 2, size);
+      g.restore();
+      const cx = ox, cy = oy;
       const r = 7 * s;
       g.fillStyle = '#1f5fbf';
       g.fillRect(cx - r, cy - r, r * 2, r * 2);

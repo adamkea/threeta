@@ -1,6 +1,6 @@
 import { createRng } from '../core/random.js';
 import {
-  bounds, centroid, chamferAcute, insideConvex, isAxisRect, signedArea, simplify,
+  bounds, centroid, chamferAcute, insideConvex, signedArea, simplify,
 } from './geom.js';
 
 // The city as pure data: a road graph (junctions joined by straight roads of any angle and
@@ -265,11 +265,25 @@ function generate(seed) {
   };
   const xs = lines(bxs, wx), zs = lines(bzs, wz);
 
+  // --- Warp the lattice: a slow bend across town so streets curve and blocks skew, plus a
+  // little jitter per junction. The ring road round the island stays straight (its junctions
+  // only slide along it), and the bend fades out towards it.
+  const ph = Array.from({ length: 4 }, () => rng.range(0, Math.PI * 2));
+  const k1 = (Math.PI * 2) / (size * 0.95), k2 = (Math.PI * 2) / (size * 0.42);
+  const taper = (i) => (i === 0 || i === N ? 0 : i === 1 || i === N - 1 ? 0.5 : 1);
+  const warp = (x, z, i, j) => [
+    taper(i) * (24 * Math.sin(z * k1 + ph[0]) + 5 * Math.sin((x + z) * k2 + ph[1]) + rng.range(-3, 3)),
+    taper(j) * (24 * Math.sin(x * k1 + ph[2]) + 5 * Math.sin((x - z) * k2 + ph[3]) + rng.range(-3, 3)),
+  ];
+
   const g = new RoadGraph();
   const grid = [];
   for (let i = 0; i <= N; i++) {
     grid.push([]);
-    for (let j = 0; j <= N; j++) grid[i].push(g.addNode(xs[i], zs[j]));
+    for (let j = 0; j <= N; j++) {
+      const [dx, dz] = warp(xs[i], zs[j], i, j);
+      grid[i].push(g.addNode(xs[i] + dx, zs[j] + dz));
+    }
   }
   const hEdge = [], vEdge = []; // hEdge[i][j]: (i,j)-(i+1,j) along X; vEdge[i][j]: (i,j)-(i,j+1) along Z
   for (let i = 0; i <= N; i++) {
@@ -281,15 +295,19 @@ function generate(seed) {
     }
   }
 
-  // --- A diagonal avenue cutting corner to corner through a run of blocks ---
+  // --- Diagonal avenues, cutting corner to corner through runs of blocks ---
   const reserved = new Set(); // blocks (bx * 100 + bz) that can't be merged
   const diagNodes = new Set();
-  const DIAG = 6;
-  for (let k = 0; k < DIAG; k++) {
-    g.addEdge(grid[k][DIAG - k], grid[k + 1][DIAG - 1 - k], DIAGONAL, 'avenue');
-    reserved.add(k * 100 + (DIAG - 1 - k));
-    diagNodes.add(grid[k][DIAG - k]).add(grid[k + 1][DIAG - 1 - k]);
-  }
+  const diagonal = (path) => {
+    for (let k = 0; k + 1 < path.length; k++) {
+      const [i0, j0] = path[k], [i1, j1] = path[k + 1];
+      g.addEdge(grid[i0][j0], grid[i1][j1], DIAGONAL, 'avenue');
+      reserved.add(Math.min(i0, i1) * 100 + Math.min(j0, j1));
+      diagNodes.add(grid[i0][j0]).add(grid[i1][j1]);
+    }
+  };
+  diagonal(Array.from({ length: 7 }, (_, k) => [k, 6 - k])); // ring (west) to ring (north)
+  diagonal(Array.from({ length: 4 }, (_, k) => [4 + k, 4 + k])); // a shorter one, south-east of the centre
 
   // --- Superblocks: a 2x2 park, plus pairs of blocks joined where a street is closed ---
   const touched = new Set(); // nodes next to a closed street
@@ -298,9 +316,10 @@ function generate(seed) {
     g.edges[e].removed = true;
     touched.add(g.edges[e].a).add(g.edges[e].b);
   };
-  const PX = 5, PZ = 5; // park's top-left block
+  const PX = 5, PZ = 1; // park's top-left block
   for (const e of [vEdge[PX + 1][PZ], vEdge[PX + 1][PZ + 1], hEdge[PX][PZ + 1], hEdge[PX + 1][PZ + 1]]) close(e);
   for (const [a, b] of [[0, 0], [1, 0], [0, 1], [1, 1]]) merged.set((PX + a) * 100 + PZ + b, 'park');
+  const parkPoint = { x: g.nodes[grid[PX + 1][PZ + 1]].x, z: g.nodes[grid[PX + 1][PZ + 1]].z };
 
   const pairs = [];
   for (let bx = 0; bx < N; bx++) {
@@ -312,7 +331,7 @@ function generate(seed) {
   shuffle(pairs, rng);
   let joins = 0;
   for (const [ax, az, bx, bz, e] of pairs) {
-    if (joins >= 5) break;
+    if (joins >= 9) break;
     const ka = ax * 100 + az, kb = bx * 100 + bz;
     if (reserved.has(ka) || reserved.has(kb) || merged.has(ka) || merged.has(kb)) continue;
     const { a, b } = g.edges[e];
@@ -324,11 +343,34 @@ function generate(seed) {
     joins++;
   }
 
+  // A closed street leaves T-junctions. Line each one up with the road running through it, so
+  // the merged block's side is straight (blocks must stay convex). Moving one can bend the road
+  // through its neighbour, so repeat until they settle.
+  for (let pass = 0; pass < 30; pass++) for (const id of touched) {
+    const live = g.edges.filter((e) => !e.removed && (e.a === id || e.b === id));
+    if (live.length !== 3) continue;
+    const n = g.nodes[id];
+    const ends = live.map((e) => g.nodes[e.a === id ? e.b : e.a]);
+    let best = null;
+    for (let p = 0; p < 3; p++) {
+      for (let q = p + 1; q < 3; q++) {
+        const A = ends[p], B = ends[q];
+        const cos = ((A.x - n.x) * (B.x - n.x) + (A.z - n.z) * (B.z - n.z)) / (Math.hypot(A.x - n.x, A.z - n.z) * Math.hypot(B.x - n.x, B.z - n.z));
+        if (!best || cos < best.cos) best = { cos, A, B };
+      }
+    }
+    const { A, B } = best;
+    const lx = B.x - A.x, lz = B.z - A.z;
+    const t = ((n.x - A.x) * lx + (n.z - A.z) * lz) / (lx * lx + lz * lz);
+    n.x = A.x + lx * t;
+    n.z = A.z + lz * t;
+  }
+
   g.compact();
   g.finalize();
 
   const blocks = traceBlocks(g);
-  const layout = { graph: g, blocks, size, half, lots: [], landmarks: [], spawn: null };
+  const layout = { graph: g, blocks, size, half, lots: [], landmarks: [], spawn: null, parkPoint };
   assignUses(layout, rng);
   layout.walk = buildWalkGraph(g, blocks);
   layout.blockHash = new BucketGrid(16);
@@ -417,7 +459,6 @@ function traceBlocks(g) {
       bounds: bounds(shape),
       center: c,
       area: signedArea(shape),
-      rect: isAxisRect(shape) ? bounds(shape) : null,
       use: 'buildings',
       group: null,
     });
@@ -426,103 +467,142 @@ function traceBlocks(g) {
   return blocks;
 }
 
+/**
+ * A block's own frame, square to its south-facing side: local +X runs along that side
+ * (eastwards), local +Z faces out of it (towards the camera). `angle` turns a Three.js object
+ * by the same amount. Local (lx, lz) about a centre c is world c + lx * (ux, uz) + lz * (-uz, ux).
+ */
+function blockFrame(g, b) {
+  let best = b.halfEdges[0], bestZ = -Infinity;
+  for (const h of b.halfEdges) {
+    const [dx] = g.dir(h);
+    if (-dx > bestZ) (bestZ = -dx), (best = h); // outward normal (dz, -dx): most southward
+  }
+  let [ux, uz] = g.dir(best);
+  if (ux < 0) (ux = -ux), (uz = -uz);
+  return { ux, uz, angle: Math.atan2(-uz, ux) };
+}
+
+export function toWorld(f, cx, cz, lx, lz) {
+  return { x: cx + lx * f.ux - lz * f.uz, z: cz + lx * f.uz + lz * f.ux };
+}
+
+export function toLocal(f, cx, cz, x, z) {
+  const wx = x - cx, wz = z - cz;
+  return { x: wx * f.ux + wz * f.uz, z: -wx * f.uz + wz * f.ux };
+}
+
+/** A centre near the block's middle where a hx × hz (half-size) rectangle in its frame fits, or null. */
+function fitRect(b, f, hx, hz) {
+  for (const [ox, oz] of [[0, 0], [2, 0], [-2, 0], [0, 2], [0, -2], [3, 3], [-3, 3], [3, -3], [-3, -3], [5, 0], [-5, 0], [0, 5], [0, -5]]) {
+    const c = toWorld(f, b.center.x, b.center.z, ox, oz);
+    const ok = [[-hx, -hz], [hx, -hz], [hx, hz], [-hx, hz]].every(([lx, lz]) => {
+      const p = toWorld(f, c.x, c.z, lx, lz);
+      return insideConvex(b.shape, p.x, p.z, -0.2);
+    });
+    if (ok) return c;
+  }
+  return null;
+}
+
+// Car park: rows of bays either side of two aisles, in the block's frame.
+const LOT_BAYS = 10;
+const LOT_AISLE = 6.6;
+const LOT_HW = (LOT_BAYS * LOT.bayWidth + 2) / 2; // paved half-width
+const LOT_HD = (4 * LOT.bayDepth + 2 * LOT_AISLE) / 2; // paved half-depth
+
 /** Decides what goes on each block: landmarks, the starting car park, parks, other lots, buildings. */
 function assignUses(layout, rng) {
   const { blocks, half, graph: g } = layout;
-  const dims = (b) => (b.rect ? [b.rect.maxX - b.rect.minX, b.rect.maxZ - b.rect.minZ] : [0, 0]);
-  const free = (b) => b.use === 'buildings' && !b.taken;
+  const free = (b) => b.use === 'buildings';
+  const typical = blocks.map((b) => b.area).sort((a, c) => a - c)[blocks.length >> 1];
   for (const b of blocks) {
     b.downtown = 1 - Math.min(1, Math.hypot(b.center.x, b.center.z) / half);
-    const [w, d] = dims(b);
-    // Superblocks show up as unusually big faces.
-    b.superblock = b.rect && (w > 70 || d > 70);
-    if (b.superblock && w > 70 && d > 70) b.use = 'park';
+    b.frame = blockFrame(g, b);
+    b.superblock = b.area > typical * 1.8;
+    if (insideConvex(b.shape, layout.parkPoint.x, layout.parkPoint.z)) b.use = 'park';
   }
 
-  const lotFits = (b) => {
-    if (!b.rect) return null;
-    const [w, d] = dims(b);
-    const s = CITY.sidewalk;
-    const aisle = (d - 2 * s - 4 * LOT.bayDepth) / 2;
-    const bays = Math.floor((w - 2 * s - 2) / LOT.bayWidth);
-    if (aisle < 6 || aisle > 10 || bays < 6 || w > 70) return null;
-    return { aisle, bays, w, d };
-  };
   const nearest = (x, z, ok) => {
     let best = null, bd = Infinity;
     for (const b of blocks) {
-      if (!free(b) || !ok(b)) continue;
+      if (!free(b)) continue;
       const d = Math.hypot(b.center.x - x, b.center.z - z);
-      if (d < bd) (bd = d), (best = b);
+      if (d >= bd) continue;
+      const fit = ok(b);
+      if (fit) (bd = d), (best = { b, fit });
     }
     return best;
   };
 
-  // The starting car park, nearest the middle of town.
-  const makeLot = (b) => {
-    const fit = lotFits(b);
-    const s = CITY.sidewalk, d = LOT.bayDepth, a = fit.aisle;
+  const lotFit = (b) => fitRect(b, b.frame, LOT_HW + CITY.sidewalk, LOT_HD + CITY.sidewalk);
+  const makeLot = (b, c) => {
+    const d = LOT.bayDepth, a = LOT_AISLE, hd = LOT_HD;
     b.use = 'lot';
     b.lot = {
-      x0: b.rect.minX,
-      z0: b.rect.minZ,
-      w: fit.w,
-      d: fit.d,
-      bays: fit.bays,
-      bx0: s + (fit.w - 2 * s - fit.bays * LOT.bayWidth) / 2,
+      block: b.id,
+      cx: c.x,
+      cz: c.z,
+      ...b.frame,
+      hw: LOT_HW,
+      hd,
+      bays: LOT_BAYS,
+      bx0: -(LOT_BAYS * LOT.bayWidth) / 2, // local x of the first bay line
+      // Local z ranges: aisles (which carry on out to the street as driveways) and bay rows,
+      // each with which way a car parked nose-in faces (+1 = local +Z).
       aisles: [
-        [s + d, s + d + a],
-        [s + 3 * d + a, s + 3 * d + 2 * a],
+        [-hd + d, -hd + d + a],
+        [-hd + 3 * d + a, -hd + 3 * d + 2 * a],
       ],
-      // Each row: its z range and which way a car parked nose-in faces (+1 = +Z).
       rows: [
-        { z0: s, z1: s + d, nose: -1 },
-        { z0: s + d + a, z1: s + 2 * d + a, nose: 1 },
-        { z0: s + 2 * d + a, z1: s + 3 * d + a, nose: -1 },
-        { z0: s + 3 * d + 2 * a, z1: s + 4 * d + 2 * a, nose: 1 },
+        { z0: -hd, z1: -hd + d, nose: -1 },
+        { z0: -hd + d + a, z1: -hd + 2 * d + a, nose: 1 },
+        { z0: -hd + 2 * d + a, z1: -hd + 3 * d + a, nose: -1 },
+        { z0: -hd + 3 * d + 2 * a, z1: hd, nose: 1 },
       ],
     };
     layout.lots.push(b.lot);
   };
-  const start = nearest(0, 0, (b) => lotFits(b) && !b.superblock);
-  makeLot(start);
 
-  // Landmarks: square-ish blocks big enough for them, near where they'd sit in town.
-  const landmarkFits = (b) => {
-    const [w, d] = dims(b);
-    return w >= 40 && d >= 40 && w <= 60 && d <= 60;
-  };
+  // The starting car park, nearest the middle of town.
+  const start = nearest(0, 0, lotFit);
+  makeLot(start.b, start.fit);
+
+  // Landmarks: blocks big enough for them, near where they'd sit in town.
   for (const [kind, fx, fz] of [['police', -0.3, 0.15], ['hospital', 0.3, -0.35]]) {
-    const b = nearest(fx * half, fz * half, landmarkFits);
-    if (!b) continue;
+    const found = nearest(fx * half, fz * half, (b) => fitRect(b, b.frame, 19, 19));
+    if (!found) continue;
+    const { b, fit } = found;
     b.use = kind;
-    layout.landmarks.push({ kind, block: b, cx: (b.rect.minX + b.rect.maxX) / 2, cz: (b.rect.minZ + b.rect.maxZ) / 2 });
+    layout.landmarks.push({ kind, block: b, cx: fit.x, cz: fit.z, angle: b.frame.angle });
   }
 
   for (const b of blocks) {
     if (!free(b)) continue;
-    if (!b.rect) {
-      if (rng.chance(0.35)) b.use = 'park'; // triangular plazas
-    } else if (rng.chance(b.superblock ? 0.3 : 0.1)) b.use = 'park';
-    else if (lotFits(b) && rng.chance(0.09)) makeLot(b);
+    if (b.curb.length === 3) {
+      if (rng.chance(0.3)) b.use = 'park'; // triangular plazas
+    } else if (rng.chance(b.superblock ? 0.15 : 0.06)) b.use = 'park';
+    else if (rng.chance(0.1)) {
+      const c = lotFit(b);
+      if (c) makeLot(b, c);
+    }
   }
 
-  // Start beside the car park, in the lane heading north along its west side.
-  const west = start.halfEdges.find((h) => {
-    const [dx, dz] = g.dir(h);
-    return dz < -0.99 && Math.abs(dx) < 0.01;
-  }) ?? start.halfEdges[0];
+  // Start beside the car park, in the lane on its most northbound side.
+  const sb = start.b;
+  let west = sb.halfEdges[0];
+  for (const h of sb.halfEdges) if (g.dir(h)[1] < g.dir(west)[1]) west = h;
   const [dx, dz] = g.dir(west);
   const A = g.nodes[g.from(west)];
-  const lane = g.edge(west).lane;
-  const along = g.edge(west).len / 2;
+  const e = g.edge(west);
+  const along = e.len / 2;
   layout.spawn = {
-    x: A.x + dx * along - dz * lane,
-    z: A.z + dz * along + dx * lane,
+    x: A.x + dx * along - dz * e.lane,
+    z: A.z + dz * along + dx * e.lane,
     heading: Math.atan2(dx, dz),
     // A spot on the car park's sidewalk, beside the car, for starting on foot.
-    footX: A.x + dx * along - dz * (g.edge(west).hw + 1.5),
-    footZ: A.z + dz * along + dx * (g.edge(west).hw + 1.5),
+    footX: A.x + dx * along - dz * (e.hw + 1.5),
+    footZ: A.z + dz * along + dx * (e.hw + 1.5),
   };
 }
 
@@ -664,13 +744,11 @@ export function groundHeight(x, z) {
   const b = blockAt(x, z);
   if (!b) return 0;
   if (b.lot) {
-    const { x0, z0, w, d, aisles } = b.lot;
-    const s = CITY.sidewalk;
-    const lx = x - x0, lz = z - z0;
-    const insideX = lx > s && lx < w - s;
-    const insideZ = lz > s && lz < d - s;
-    if (insideX && insideZ) return 0;
-    if (insideZ && aisles.some(([a, c]) => lz > a && lz < c)) return 0; // driveway
+    const lot = b.lot;
+    const p = toLocal(lot, lot.cx, lot.cz, x, z);
+    const insideZ = Math.abs(p.z) < lot.hd;
+    if (Math.abs(p.x) < lot.hw && insideZ) return 0;
+    if (insideZ && lot.aisles.some(([a, c]) => p.z > a && p.z < c)) return 0; // driveway out to the street
   }
   return CITY.curbHeight;
 }

@@ -81,18 +81,20 @@ The city isn't a plain grid any more. `src/world/CityLayout.js` generates it, de
 **road graph**: junctions joined by straight roads of any angle and width. Every system drives, walks and
 draws from that graph.
 
-- **Uneven blocks:** each row and column of the underlying lattice has its own width (34–58 m).
-- **Avenues:** one wide (18 m) avenue each way across town, plus a **diagonal avenue** cutting corner to
-  corner through a run of blocks. It splits them into triangles and makes big 6-way junctions with
+- **Bent streets:** the underlying 8×8 lattice gets uneven row and column widths (34–58 m), then a slow
+  warp across town and a little jitter per junction. Streets curve gently and blocks become skewed
+  quadrilaterals. The ring road round the island stays straight.
+- **Avenues:** one wide (18 m) avenue each way, and **two diagonal avenues** cutting corner to corner
+  through runs of blocks. They split those blocks into triangles and make big 6-way junctions with
   three-phase signals.
-- **Superblocks:** a 2×2 central park, and a few pairs of blocks joined where a street was closed, which
-  leaves T-junctions behind.
+- **Superblocks:** a 2×2 park and several pairs of blocks joined where a street was closed, which leaves
+  T-junctions behind.
 - **Blocks are convex polygons** (the faces of the graph). They are filled with buildings by splitting the
-  footprint along its longest side, so plots on the diagonal sit square to it. Some blocks are parks or
-  plazas, car parks or landmarks instead.
+  footprint along its longest side, so plots sit square to their street. The police station, hospital and
+  car parks are turned to line up with their block. Some blocks are parks or triangular plazas.
 
-To change the layout, edit `generate()` in `CityLayout.js`: block sizes, which lines are avenues, the
-diagonal's path, which streets close. Junction geometry (how far each junction box reaches, crosswalks,
+To change the layout, edit `generate()` in `CityLayout.js`: block sizes, warp strength, which lines are
+avenues, the diagonals' paths, which streets close. Junction geometry (how far each junction box reaches, crosswalks,
 stop lines, signal phases and poles) is all derived from the graph.
 
 Dev console (**`**): `tp <x> <z>` or `tp spawn | police | hospital | diagonal | park` teleports you.
