@@ -31,6 +31,16 @@ export function nearestIndex(v, inset) {
   return best;
 }
 
+/**
+ * Inclusive range [lo, hi] of waypoint indices along one axis whose block sides can come
+ * within `maxD` of coordinate `v` (so spawners only try sidewalks near the player).
+ */
+export function indexRange(v, maxD) {
+  const lo = Math.max(0, nearestIndex(v - maxD - CITY.blockSize, 2) - 1);
+  const hi = Math.min(SIZE - 1, nearestIndex(v + maxD + CITY.blockSize, 2) + 1);
+  return [lo, hi];
+}
+
 /** Road line (0..blocks) closest to waypoint index `k`. */
 const roadLineOf = (k) => (k + 1) >> 1;
 

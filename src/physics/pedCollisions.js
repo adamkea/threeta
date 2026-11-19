@@ -5,19 +5,25 @@ const HIT_DAMAGE = 5.5; // hit points per m/s of closing speed above the knockdo
 const BUMP_SPEED = 1.2; // m/s: a car nudging into someone slower than a knockdown still sends them sprawling
 const BUMP_DOWN_TIME = 1.1; // seconds on the ground after a low-speed bump
 
+const _near = [];
+const _circles = new Float64Array(4);
+
 /**
  * Pushes pedestrians out of cars; fast impacts knock them down, slow ones bump them over.
  * People already on the ground get driven over rather than bulldozed along. Cars barely notice.
  * `onKnockdown(ped, car)` is called for each person a car knocks over at speed.
+ * `carGrid` is a SpatialHash of the active cars.
  */
-export function resolvePedCarCollisions(peds, cars, onKnockdown = null) {
+export function resolvePedCarCollisions(peds, carGrid, onKnockdown = null) {
   for (const p of peds) {
     // Down (or dead): the car rolls right over them.
     if (!p.active || p.isDown) continue;
-    for (const car of cars) {
+    for (const car of carGrid.query(p.position.x, p.position.y, 5, _near)) {
       if (!car.active || car.position.distanceToSquared(p.position) > 16) continue;
       const r = car.cfg.collisionRadius + p.radius;
-      for (const [cx, cz] of car.collisionCircles()) {
+      car.collisionCircles(_circles);
+      for (let i = 0; i < 2; i++) {
+        const cx = _circles[i * 2], cz = _circles[i * 2 + 1];
         let nx = p.position.x - cx;
         let nz = p.position.y - cz;
         const d = Math.hypot(nx, nz);
@@ -56,14 +62,12 @@ export function resolvePedCarCollisions(peds, cars, onKnockdown = null) {
   }
 }
 
-/** Keeps people from walking through each other (equal push, no knockdown). */
-export function resolvePedPedCollisions(peds) {
-  for (let a = 0; a < peds.length; a++) {
-    const p = peds[a];
-    if (!p.active) continue;
-    for (let b = a + 1; b < peds.length; b++) {
-      const q = peds[b];
-      if (!q.active || q.dead || p.dead) continue; // walk over bodies rather than shoving them
+/** Keeps people from walking through each other (equal push, no knockdown). `pedGrid` holds `peds`. */
+export function resolvePedPedCollisions(peds, pedGrid) {
+  for (const p of peds) {
+    if (!p.active || p.dead) continue; // walk over bodies rather than shoving them
+    for (const q of pedGrid.query(p.position.x, p.position.y, p.radius * 2 + 0.5, _near)) {
+      if (q.id <= p.id || !q.active || q.dead) continue; // each pair once
       let nx = q.position.x - p.position.x;
       let nz = q.position.y - p.position.y;
       const r = p.radius + q.radius;

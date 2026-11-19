@@ -14,6 +14,17 @@ export const DIRS = [
 
 export const nodeX = (i) => roadCenter(i);
 
+/**
+ * Inclusive range [lo, hi] of node indices along one axis whose road segments (node to next
+ * node) can pass within `maxD` of coordinate `v`, or null if none do. Lets spawners pick
+ * random roads near the player instead of anywhere in the city.
+ */
+export function nodeRange(v, maxD) {
+  const lo = Math.max(0, Math.floor((v - maxD - nodeX(0)) / CITY.cell) - 1);
+  const hi = Math.min(CITY.blocks, Math.ceil((v + maxD - nodeX(0)) / CITY.cell) + 1);
+  return lo <= hi ? [lo, hi] : null;
+}
+
 export function isValidNode(i, j) {
   return i >= 0 && j >= 0 && i <= CITY.blocks && j <= CITY.blocks;
 }

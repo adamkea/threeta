@@ -1,6 +1,8 @@
 import * as THREE from 'three';
 import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeometry.js';
+import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { toon } from '../render/toon.js';
+import { bindPart, boneOf, rigMesh, usePalette, worldSkeleton } from '../render/skinBake.js';
 
 /*
  * Car body styles. Cabin numbers are fractions of the car's length, measured along +Z (forward):
@@ -422,5 +424,90 @@ export function buildCarMesh(name, color) {
     wheels.push({ pivot, spin, front });
   }
 
-  return { root, body, paint, roofPaint, stripeMat, stripeGroup, tailMat, wheels, siren };
+  const colors = bakeCar(name, root, [root, body, stripeGroup, ...wheels.map((w) => w.spin)], L, W);
+  return {
+    root,
+    body,
+    paint: colors(paint),
+    roofPaint: colors(roofPaint),
+    stripeMat: colors(stripeMat),
+    stripeGroup,
+    tailMat,
+    wheels,
+    siren: siren && { red: colors(siren.red), blue: colors(siren.blue) },
+  };
+}
+
+/** Merged geometry per model and bucket (see bakeCar); identical for every car of a model. */
+const bakedCache = new Map();
+
+/**
+ * Replace a freshly built car's ~50 meshes with a few SkinnedMeshes on one skeleton (body,
+ * stripes, each wheel's spin), so a car costs a handful of draw calls instead of dozens.
+ * Plain-colour toon parts share one mesh (two: shadow-casting or not), as do plain unlit
+ * parts; their colours come from per-car palettes. Anything else (lamps, textures, the
+ * transparent contact shadow) keeps its own material, one mesh per material.
+ * Returns `colors(material)`: a `{ color }` stand-in for a merged material, so recolouring
+ * (paint jobs, stripes, sirens) still works by setting `.color`.
+ */
+function bakeCar(name, root, bones, L, W) {
+  root.updateMatrixWorld(true);
+  const boneSet = new Set(bones);
+  const isBone = (o) => boneSet.has(o);
+  const toonSlots = new Map(); // material -> palette slot
+  const basicSlots = new Map();
+  const ordinals = new Map(); // other materials, numbered in build order (stable per model)
+  const slotOf = (map, mat) => (map.has(mat) ? map.get(mat) : map.set(mat, map.size).get(mat));
+  const buckets = new Map(); // key -> { kind, material, castShadow, renderOrder, parts: [] }
+  const meshes = [];
+  root.traverse((o) => o.isMesh && meshes.push(o));
+  for (const mesh of meshes) {
+    const mat = mesh.material;
+    let kind = 'own', slot = 0, key;
+    if (mat.isMeshToonMaterial && !mat.map) (kind = 'toon'), (slot = slotOf(toonSlots, mat));
+    else if (mat.isMeshBasicMaterial && !mat.map && !mat.transparent) (kind = 'basic'), (slot = slotOf(basicSlots, mat));
+    key = kind === 'own' ? `own${slotOf(ordinals, mat)}-${mesh.castShadow}` : `${kind}-${mesh.castShadow}`;
+    if (!buckets.has(key)) buckets.set(key, { kind, material: mat, castShadow: mesh.castShadow, renderOrder: 0, parts: [] });
+    const b = buckets.get(key);
+    b.renderOrder = Math.max(b.renderOrder, mesh.renderOrder);
+    b.parts.push({ mesh, slot });
+  }
+
+  let cached = bakedCache.get(name);
+  if (!cached) {
+    cached = new Map();
+    for (const [key, b] of buckets) {
+      const uv = b.kind === 'own' && !!b.material.map;
+      const geos = b.parts.map(({ mesh, slot }) => {
+        const bone = boneOf(mesh, isBone);
+        return bindPart(mesh.geometry, mesh, bone, bones.indexOf(bone), slot, uv);
+      });
+      const geometry = mergeGeometries(geos);
+      geometry.userData.shared = true;
+      cached.set(key, geometry);
+    }
+    bakedCache.set(name, cached);
+  }
+
+  for (const mesh of meshes) mesh.removeFromParent();
+  const palette = (slots) => [...slots.keys()].map((m) => m.color.clone());
+  const toonPalette = palette(toonSlots);
+  const basicPalette = palette(basicSlots);
+  const toonMat = toonSlots.size ? usePalette(toon(), toonPalette) : null;
+  const basicMat = basicSlots.size ? usePalette(new THREE.MeshBasicMaterial(), basicPalette) : null;
+  const skeleton = worldSkeleton(bones);
+  const bounds = new THREE.Sphere(new THREE.Vector3(0, 0.9, 0), Math.hypot(L / 2, W / 2) + 0.6);
+  for (const [key, b] of buckets) {
+    const material = b.kind === 'toon' ? toonMat : b.kind === 'basic' ? basicMat : b.material;
+    const mesh = rigMesh(cached.get(key), material, skeleton, bounds);
+    mesh.castShadow = b.castShadow;
+    mesh.renderOrder = b.renderOrder;
+    root.add(mesh);
+  }
+
+  return (mat) => {
+    if (toonSlots.has(mat)) return { color: toonPalette[toonSlots.get(mat)] };
+    if (basicSlots.has(mat)) return { color: basicPalette[basicSlots.get(mat)] };
+    return mat;
+  };
 }

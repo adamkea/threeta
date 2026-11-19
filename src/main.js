@@ -20,6 +20,7 @@ import { CityMap } from './ui/CityMap.js';
 import { weaponIcon } from './ui/weaponIcons.js';
 import { CombatSystem } from './combat/CombatSystem.js';
 import { ParkedCars } from './vehicles/ParkedCars.js';
+import { Neighbourhood } from './core/SpatialHash.js';
 
 const canvas = document.getElementById('game');
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
@@ -183,19 +184,25 @@ const NO_INPUT = { throttle: 0, steer: 0, move: { x: 0, y: 0 }, isDown: () => fa
 let bustedTimer = 0; // > 0 while the BUSTED / FLATLINED sequence plays
 let bannerTimer = 0;
 const policeCtx = { player, wanted, world };
+const near = new Neighbourhood(); // spatial grids of cars and people, rebuilt every step
 
 /** One fixed physics step for everything. */
 function step(dt) {
   const cars = allCars();
   const peds = allPeds();
   const active = cars.filter((c) => c.active && !c.overboard);
+  // Neighbour grids for the AI (positions at the start of the step)...
+  near.rebuild(active, peds, peds.filter(onRoad));
   player.step(dt, bustedTimer > 0 ? NO_INPUT : input, world);
-  traffic.step(dt, cars, world, peds.filter(onRoad));
+  traffic.step(dt, near, world);
   police.step(dt, policeCtx);
-  npcs.step(dt, world, peds, active, lights);
-  resolveCarCollisions(active, 0.3, onCarHit);
-  resolvePedCarCollisions(peds, active, onKnockdown);
-  resolvePedPedCollisions(peds);
+  npcs.step(dt, world, peds, near, lights);
+  // ...and again for collisions, now everything has moved.
+  near.cars.rebuild(active);
+  near.peds.rebuild(peds);
+  resolveCarCollisions(active, near.cars, 0.3, onCarHit);
+  resolvePedCarCollisions(peds, near.cars, onKnockdown);
+  resolvePedPedCollisions(peds, near.peds);
   ramCooldown = Math.max(0, ramCooldown - dt);
 }
 

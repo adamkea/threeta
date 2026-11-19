@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { Pedestrian } from './Pedestrian.js';
 import { groundHeight } from '../world/City.js';
-import { SIZE, coord, crossingOf, isValid, nearestIndex, neighbours } from './Sidewalks.js';
+import { coord, crossingOf, indexRange, isValid, nearestIndex, neighbours } from './Sidewalks.js';
 
 import { civilianLook, copLook, rollPerson } from './outfits.js';
 
@@ -15,6 +15,9 @@ const BODY_TIME = 25; // seconds a body stays on the street before it's cleared 
 const HEALTH = { civilian: 60, gang: 100, cop: 100 };
 
 const _v = new THREE.Vector2();
+// Neighbour lists from the grids (NPCs update one at a time, so these can be shared).
+const _cars = [];
+const _peds = [];
 const _move = new THREE.Vector2();
 
 /**
@@ -87,9 +90,10 @@ export class NpcManager {
 
   /**
    * One fixed step for every NPC. NPCs with `busy` set are being driven by someone else: they
-   * run to `n.goal` ({x, y}, at `n.goalSpeed`) and ignore their own fear and wandering. `peds` = everyone on foot (incl. the player), `cars` = active cars.
+   * run to `n.goal` ({x, y}, at `n.goalSpeed`) and ignore their own fear and wandering. `peds` = everyone on foot (incl. the player),
+   * `near` = the step's Neighbourhood (grids of active cars and of people).
    */
-  step(dt, world, peds, cars, lights) {
+  step(dt, world, peds, near, lights) {
     const npcs = this.active;
 
     // Someone got knocked down (or killed): everyone nearby scatters.
@@ -135,7 +139,7 @@ export class NpcManager {
       }
       if (n.state === 'recover') this.#flee(n, _v.set(this.rng.range(-1, 1), this.rng.range(-1, 1)).normalize(), 3);
 
-      this.#dodgeCars(n, cars);
+      this.#dodgeCars(n, near.cars.query(p.position.x, p.position.y, 15, _cars));
 
       switch (n.state) {
         case 'flee': {
@@ -153,7 +157,7 @@ export class NpcManager {
           const diff = Math.atan2(Math.sin(faceTo - p.heading), Math.cos(faceTo - p.heading));
           p.heading += diff * Math.min(1, 6 * dt);
           const green = lights.greenRemaining(c.node[0], c.node[1], c.greenAxis);
-          if (green > CROSS_GREEN_NEEDED && roadClear(cars, c.mid)) {
+          if (green > CROSS_GREEN_NEEDED && roadClear(near.cars.query(c.mid.x, c.mid.z, 17, _cars), c.mid)) {
             n.state = 'cross';
             n.stateTime = 0;
           } else if (n.stateTime > 20) {
@@ -172,7 +176,7 @@ export class NpcManager {
             break;
           }
           _move.divideScalar(d);
-          this.#avoidPeople(n, npcs, peds);
+          this.#avoidPeople(n, near.peds.query(p.position.x, p.position.y, 3, _peds));
           const hurry = n.state === 'cross' && n.hurry > 0;
           _move.multiplyScalar(hurry ? 1 : n.pace);
           p.update(dt, _move, hurry, world);
@@ -227,7 +231,7 @@ export class NpcManager {
     n.stateTime = 0;
   }
 
-  /** Get out of the way of a car bearing down on us: dive to whichever side we're already on. */
+  /** Get out of the way of a car bearing down on us (`cars` = those nearby): dive to whichever side we're already on. */
   #dodgeCars(n, cars) {
     const p = n.ped;
     for (const car of cars) {
@@ -252,8 +256,8 @@ export class NpcManager {
     }
   }
 
-  /** Steer around other people, keeping right when meeting someone head-on. */
-  #avoidPeople(n, npcs, peds) {
+  /** Steer around other people (`peds` = those nearby), keeping right when meeting someone head-on. */
+  #avoidPeople(n, peds) {
     const p = n.ped;
     let ax = 0, az = 0;
     for (const o of peds) {
@@ -370,9 +374,12 @@ export class NpcManager {
 
   /** Place a walker somewhere along a block's sidewalk, `minD`..`maxD` from the focus. */
   #trySpawn(focus, minD, maxD, tries) {
+    // Only sidewalks that can reach the spawn ring around the focus.
+    const rx = indexRange(focus.x, maxD);
+    const rz = indexRange(focus.z, maxD);
     for (let t = 0; t < tries; t++) {
-      const ix = this.rng.int(0, SIZE - 1);
-      const iz = this.rng.int(0, SIZE - 1);
+      const ix = this.rng.int(rx[0], rx[1]);
+      const iz = this.rng.int(rz[0], rz[1]);
       // Walk along this side of the block: partner corner on the same block is index ^ 1.
       const to = this.rng.chance(0.5) ? [ix ^ 1, iz] : [ix, iz ^ 1];
       if (!isValid(...to)) continue;

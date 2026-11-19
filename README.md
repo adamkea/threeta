@@ -56,6 +56,7 @@ edges and boosts saturation. Roads have double-yellow centre lines, stop lines a
 - `src/world/City.js` – procedural seeded city grid (roads, markings, buildings, parks, lamps) + AABB colliders
 - `src/vehicles/Car.js` – arcade car physics (grip/drift, steering, collisions) and mesh
 - `src/world/ColliderGrid.js` – spatial hash so cars only test nearby static colliders
+- `src/core/SpatialHash.js` – grids of the moving cars and people, rebuilt each physics step, so AI and collisions only look at neighbours
 - `src/traffic/RoadNetwork.js` – lane geometry helpers over the intersection grid (right-hand traffic)
 - `src/traffic/TrafficLights.js` – per-intersection signal cycles + signal heads on the lamp posts
 - `src/traffic/TrafficDriver.js` – AI driver: random routes, pure-pursuit steering, obeys lights, queues, overtakes stopped cars, rejoins lanes after crashes
@@ -74,5 +75,6 @@ edges and boosts saturation. Roads have double-yellow centre lines, stop lines a
 - `src/combat/Health.js` – hit points (damage / heal / dead) for anything that can be hurt
 - `src/combat/weapons.js` – weapon definitions (`WEAPONS`) and `Weapon` (ammo, fire-rate cooldown, reload)
 - `src/combat/CombatSystem.js` – fires shots for anyone (player or NPC): hitscan vs people, cars (oriented boxes) and buildings, damage + knockback, panic, tracers / muzzle flashes / impact puffs
+- `src/render/skinBake.js` – bakes a person's or car's many parts into a few skinned meshes (one draw call per person, a handful per car), coloured from per-model palettes
 - `src/core/CameraRig.js` – high, angled, north-up follow camera with look-ahead and speed zoom
 - `src/core/Input.js` – keyboard + mouse input

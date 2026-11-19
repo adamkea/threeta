@@ -1,7 +1,9 @@
 import * as THREE from 'three';
 import { offIsland, WATER_Y } from '../world/City.js';
 import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeometry.js';
+import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { toon } from '../render/toon.js';
+import { bindPart, boneOf, rigMesh, showBone, usePalette, worldSkeleton } from '../render/skinBake.js';
 import { Health } from '../combat/Health.js';
 
 /** Smooth solid of revolution from (radius, y) pairs, squashed front-to-back by `depth`. */
@@ -109,19 +111,40 @@ const ACCEL = 30;
 const RADIUS = 0.4;
 const BASE_SCALE = 1.35; // exaggerated so people read clearly from the high camera
 
-// Accessory colours shared by everyone.
-let sharedMats = null;
-function accessoryMats() {
-  sharedMats ??= {
-    gold: toon({ color: 0xf2c230 }),
-    black: toon({ color: 0x141416 }),
-    lens: toon({ color: 0x101418 }),
-    grip: toon({ color: 0x4a3426 }),
-  };
-  return sharedMats;
+// Every person is drawn as ONE skinned mesh (one draw call per render pass) rather than a few
+// dozen small meshes. Each vertex carries a colour slot; each person's material holds the
+// palette for those slots, so outfits are just palette changes. Body parts and accessories
+// ride on "bones" that are the ordinary pivot objects the animation code already moves, and
+// accessories are shown / hidden by scaling their bone to zero.
+const SLOTS = [
+  'shirt', // outer torso (jacket when open)
+  'inner', // shirt under an open jacket
+  'sleeve', 'pants', 'shoe', 'skin', 'hair', 'hat', 'hatTrim', 'mask', 'epaulette', 'belt', 'stripe',
+  // Accessory colours shared by everyone.
+  'gold', 'black', 'lens', 'grip',
+];
+const FIXED_COLORS = { gold: 0xf2c230, black: 0x141416, lens: 0x101418, grip: 0x4a3426 };
+
+/** Every part baked into one geometry; built once and shared (every person has the same rig). */
+let sharedSkin = null;
+function skinGeometry(root, bones, isBone) {
+  if (sharedSkin) return sharedSkin;
+  root.updateMatrixWorld(true);
+  const parts = [];
+  root.traverse((o) => {
+    const part = o.userData.part;
+    if (!part) return;
+    const bone = boneOf(o, isBone);
+    parts.push(bindPart(part.geo, o, bone, bones.indexOf(bone), part.slot));
+  });
+  sharedSkin = mergeGeometries(parts);
+  sharedSkin.userData.shared = true;
+  return sharedSkin;
 }
 
 export { WALK_SPEED, RUN_SPEED };
+
+let nextPedId = 1;
 
 /**
  * A person on foot (player or NPC). Same 2D conventions as Car: position/velocity are
@@ -129,6 +152,7 @@ export { WALK_SPEED, RUN_SPEED };
  */
 export class Pedestrian {
   constructor(look = {}) {
+    this.id = nextPedId++;
     this.position = new THREE.Vector2();
     this.velocity = new THREE.Vector2();
     this.heading = 0;
@@ -187,24 +211,25 @@ export class Pedestrian {
     m.hair.color.set(hair);
     this.mesh.scale.setScalar(BASE_SCALE * scale);
 
-    a.placket.visible = a.collar.visible = inner !== null;
-    a.chain.visible = chain;
-    a.badge.visible = badge;
-    a.radio.visible = radio;
-    a.glasses.visible = glasses;
-    for (const e of a.epaulettes) e.visible = epaulettes !== null;
+    showBone(a.placket, inner !== null);
+    showBone(a.collar, inner !== null);
+    showBone(a.chain, chain);
+    showBone(a.badge, badge);
+    showBone(a.radio, radio);
+    showBone(a.glasses, glasses);
+    for (const e of a.epaulettes) showBone(e, epaulettes !== null);
     if (epaulettes !== null) m.epaulette.color.set(epaulettes);
-    a.belt.visible = belt !== null;
-    a.holster.visible = belt !== null && badge;
+    showBone(a.belt, belt !== null);
+    showBone(a.holster, belt !== null && badge);
     if (belt !== null) m.belt.color.set(belt);
-    for (const st of a.stripes) st.visible = stripes !== null;
+    for (const st of a.stripes) showBone(st, stripes !== null);
     if (stripes !== null) m.stripe.color.set(stripes);
-    a.mask.visible = mask !== null;
+    showBone(a.mask, mask !== null);
     if (mask !== null) m.mask.color.set(mask);
 
-    for (const [type, g] of Object.entries(a.hats)) g.visible = hat?.type === type;
+    for (const [type, g] of Object.entries(a.hats)) showBone(g, hat?.type === type);
     // Hats that cover the whole crown hide the hair; caps leave a fringe showing.
-    this.hairMesh.visible = !hat || hat.type === 'cap' || hat.type === 'police';
+    showBone(this.hairMesh, !hat || hat.type === 'cap' || hat.type === 'police');
     if (hat) {
       m.hat.color.set(hat.color);
       m.hatTrim.color.set(hat.trim ?? hat.color);
@@ -231,7 +256,7 @@ export class Pedestrian {
   /** Show (or put away) a gun. `def` is a weapon definition from combat/weapons.js, or null. */
   setWeapon(def) {
     this.weapon = def;
-    this.acc.gun.visible = def !== null;
+    showBone(this.acc.gun, def !== null);
   }
 
   reset(x, z, heading = 0) {
@@ -437,29 +462,17 @@ export class Pedestrian {
     const body = new THREE.Group(); // pivots at the feet for falling over
     root.add(body);
     this.body = body;
-    const mat = () => toon({ color: 0xffffff });
-    const m = (this.mats = {
-      shirt: mat(), // outer torso (jacket when open)
-      inner: mat(), // shirt under an open jacket
-      sleeve: mat(),
-      pants: mat(),
-      shoe: mat(),
-      skin: mat(),
-      hair: mat(),
-      hat: toon({ color: 0xffffff, side: THREE.DoubleSide }),
-      hatTrim: mat(),
-      mask: toon({ color: 0xffffff, side: THREE.DoubleSide }),
-      epaulette: mat(),
-      belt: mat(),
-      stripe: mat(),
-    });
-    const S = accessoryMats();
+    // Colour slots: `m.shirt.color` etc. are this person's palette entries.
+    this.palette = SLOTS.map((name) => new THREE.Color(FIXED_COLORS[name] ?? 0xffffff));
+    const m = (this.mats = Object.fromEntries(SLOTS.map((name, slot) => [name, { slot, color: this.palette[slot] }])));
+    const S = m; // shared accessory colours (gold, black, lens, grip) are fixed slots
     const G = pedGeometry();
+    // A body part: just a placeholder in the rig, baked into the skinned mesh below.
     const part = (geo, mt, x = 0, y = 0, z = 0) => {
-      const mesh = new THREE.Mesh(geo, mt);
-      mesh.position.set(x, y, z);
-      mesh.castShadow = true;
-      return mesh;
+      const o = new THREE.Object3D();
+      o.position.set(x, y, z);
+      o.userData.part = { geo, slot: mt.slot };
+      return o;
     };
     const acc = (this.acc = { stripes: [], epaulettes: [] });
 
@@ -514,7 +527,6 @@ export class Pedestrian {
     torso.add(this.armL, this.armR);
     acc.gun = new THREE.Group();
     acc.gun.add(part(G.gunSlide, S.black), part(G.gunGrip, S.grip));
-    acc.gun.visible = false;
     handR.add(acc.gun);
 
     // --- Clothing ---
@@ -571,6 +583,22 @@ export class Pedestrian {
       durag: hatGroup(domeOf(m.hat), tailL, tailR),
       hood: hatGroup(part(G.hood, m.hat, 0, -0.02, -0.03)),
     };
+
+    // --- One skinned mesh for the lot ---
+    // Bones: every pivot (group), plus each part that can be shown / hidden. Fixed parts are
+    // baked into the nearest bone above them.
+    const toggles = new Set([this.hairMesh, acc.gun, acc.placket, acc.collar, acc.chain, acc.badge, acc.radio,
+      acc.belt, acc.holster, acc.glasses, acc.mask, ...acc.stripes, ...acc.epaulettes, ...Object.values(acc.hats)]);
+    const isBone = (o) => o !== root && (!o.userData.part || toggles.has(o));
+    const bones = [];
+    root.traverse((o) => isBone(o) && bones.push(o));
+    const material = usePalette(toon({ side: THREE.DoubleSide }), this.palette); // hats, hoods, masks are open shells
+    // Fixed bounds big enough for standing, running or lying flat.
+    const bounds = new THREE.Sphere(new THREE.Vector3(0, 0.8, 0), 2.4);
+    const skinned = rigMesh(skinGeometry(root, bones, isBone), material, worldSkeleton(bones), bounds);
+    skinned.castShadow = true;
+    root.add(skinned);
+    showBone(acc.gun, false);
     return root;
   }
 }

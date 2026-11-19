@@ -1,7 +1,7 @@
 import { Car } from '../vehicles/Car.js';
 import { randomModel } from '../vehicles/carModels.js';
 import { CITY } from '../world/City.js';
-import { DIRS, HALF_ROAD, LANE_OFFSET, headingOf, isValidNode, nodeX, rightOf } from './RoadNetwork.js';
+import { DIRS, HALF_ROAD, LANE_OFFSET, headingOf, isValidNode, nodeRange, nodeX, rightOf } from './RoadNetwork.js';
 import { TrafficDriver } from './TrafficDriver.js';
 
 
@@ -48,11 +48,11 @@ export class TrafficSystem {
     for (const car of this.cars) this.#trySpawn(car, focus, 15, this.spawnMax, avoid, 30);
   }
 
-  /** Run AI and physics for one fixed step. */
-  step(dt, allCars, world, peds) {
+  /** Run AI and physics for one fixed step. `near` = the step's Neighbourhood. */
+  step(dt, near, world) {
     for (const car of this.cars) {
       if (!car.active) continue;
-      const controls = this.drivers.get(car).update(dt, allCars, this.lights, peds);
+      const controls = this.drivers.get(car).update(dt, near, this.lights);
       car.update(dt, controls, world);
     }
   }
@@ -76,10 +76,13 @@ export class TrafficSystem {
   }
 
   #trySpawn(car, focus, minD, maxD, others, tries) {
-    const n = CITY.blocks;
+    // Only roads that can reach the spawn ring around the focus.
+    const ri = nodeRange(focus.x, maxD);
+    const rj = nodeRange(focus.z, maxD);
+    if (!ri || !rj) return false;
     for (let t = 0; t < tries; t++) {
-      const i = this.rng.int(0, n);
-      const j = this.rng.int(0, n);
+      const i = this.rng.int(ri[0], ri[1]);
+      const j = this.rng.int(rj[0], rj[1]);
       const d = this.rng.pick(DIRS);
       if (!isValidNode(i + d[0], j + d[1])) continue;
       const r = rightOf(d);

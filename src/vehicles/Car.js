@@ -1,11 +1,15 @@
 import * as THREE from 'three';
 import { MODELS, buildCarMesh } from './carModels.js';
 import { offIsland, WATER_Y } from '../world/City.js';
+import { showBone } from '../render/skinBake.js';
 
 const GRAVITY = 25; // m/s² (a touch heavy, so falls read well from the high camera)
 const SINK_DEPTH = -5; // how far a car sinks before settling on the seabed
 
 let nextId = 1;
+const _fwd = new THREE.Vector2();
+const _right = new THREE.Vector2();
+const _prevVel = new THREE.Vector2();
 
 const DEFAULTS = {
   engineAccel: 20, // m/s² at full throttle
@@ -41,6 +45,9 @@ export class Car {
     this.position = new THREE.Vector2(0, 0); // x, z
     this.velocity = new THREE.Vector2(0, 0);
     this.heading = 0;
+    this._fwd = new THREE.Vector2();
+    this._right = new THREE.Vector2();
+    this._fwdHeading = this._rightHeading = NaN;
     this.steer = 0; // smoothed -1..1
     this.braking = false;
     this.slip = 0;
@@ -72,12 +79,25 @@ export class Car {
     return this.velocity.length();
   }
 
+  /**
+   * Unit forward vector. Cached and shared (no allocation, AI reads it a lot): don't modify it,
+   * and copy it if you need it to survive a change of heading.
+   */
   get forward() {
-    return new THREE.Vector2(Math.sin(this.heading), Math.cos(this.heading));
+    if (this._fwdHeading !== this.heading) {
+      this._fwdHeading = this.heading;
+      this._fwd.set(Math.sin(this.heading), Math.cos(this.heading));
+    }
+    return this._fwd;
   }
 
+  /** Unit right vector; cached like `forward`. */
   get right() {
-    return new THREE.Vector2(-Math.cos(this.heading), Math.sin(this.heading));
+    if (this._rightHeading !== this.heading) {
+      this._rightHeading = this.heading;
+      this._right.set(-Math.cos(this.heading), Math.sin(this.heading));
+    }
+    return this._right;
   }
 
   reset(x, z, heading = 0, speed = 0) {
@@ -114,7 +134,7 @@ export class Car {
 
   /** Twin racing stripes over hood, roof and trunk; pass null to remove. */
   setStripes(color) {
-    this.stripeGroup.visible = color != null;
+    showBone(this.stripeGroup, color != null);
     if (color != null) this.stripeMat.color.set(color);
   }
 
@@ -132,14 +152,15 @@ export class Car {
     return THREE.MathUtils.clamp(yawRate / k, -1, 1);
   }
 
-  /** World positions of the two collision circles (front, rear). */
-  collisionCircles() {
+  /** World positions of the two collision circles, written to `out` as [frontX, frontZ, rearX, rearZ]. */
+  collisionCircles(out = new Float64Array(4)) {
     const fwd = this.forward;
     const o = this.cfg.length / 2 - this.cfg.collisionRadius;
-    return [
-      [this.position.x + fwd.x * o, this.position.y + fwd.y * o],
-      [this.position.x - fwd.x * o, this.position.y - fwd.y * o],
-    ];
+    out[0] = this.position.x + fwd.x * o;
+    out[1] = this.position.y + fwd.y * o;
+    out[2] = this.position.x - fwd.x * o;
+    out[3] = this.position.y - fwd.y * o;
+    return out;
   }
 
   /**
@@ -150,8 +171,9 @@ export class Car {
     if (!this.overboard && offIsland(this.position.x, this.position.y)) this.overboard = true;
     if (this.overboard) return this.#fall(dt);
     const c = this.cfg;
-    const fwd = this.forward;
-    const right = this.right;
+    // The pre-turn frame, held through the step (copies: the cached vectors follow the heading).
+    const fwd = _fwd.copy(this.forward);
+    const right = _right.copy(this.right);
 
     let vF = this.velocity.dot(fwd);
     let vR = this.velocity.dot(right);
@@ -204,7 +226,7 @@ export class Car {
     // velocity lags behind the new heading slightly, which is what gives slides.
     this.velocity.set(fwd.x * vF + right.x * vR, fwd.y * vF + right.y * vR);
 
-    const prevVel = this.velocity.clone();
+    const prevVel = _prevVel.copy(this.velocity);
     this.position.addScaledVector(this.velocity, dt);
     this.#collide(world);
 
