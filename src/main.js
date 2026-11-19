@@ -1,8 +1,9 @@
 import * as THREE from 'three';
 import { Input } from './core/Input.js';
 import { CameraRig } from './core/CameraRig.js';
-import { createCity, roadCenter, groundHeight, CITY } from './world/City.js';
+import { createCity, roadCenter, groundHeight, CITY, offIsland } from './world/City.js';
 import { Car } from './vehicles/Car.js';
+import { MODELS, randomModel } from './vehicles/carModels.js';
 import { ColliderGrid } from './world/ColliderGrid.js';
 import { TrafficLights } from './traffic/TrafficLights.js';
 import { TrafficSystem } from './traffic/TrafficSystem.js';
@@ -60,7 +61,7 @@ scene.add(city.group);
 const world = new ColliderGrid(city.colliders);
 
 const SPAWN = { x: roadCenter(Math.floor(CITY.blocks / 2)) + 3.5, z: roadCenter(CITY.blocks / 2) + 20 };
-const playerCar = new Car({ model: 'golf', color: 0xa8aeb6 }); // silver hatchback
+const playerCar = new Car({ model: 'hatch', color: 0xa8aeb6 }); // silver hatchback
 playerCar.reset(SPAWN.x, SPAWN.z, Math.PI);
 scene.add(playerCar.mesh);
 
@@ -349,6 +350,43 @@ devConsole.register('wanted', 'wanted [clear | up [n] | down [n] | 0-5 | off | o
   else if (/^[0-5]$/.test(sub)) setWanted(Number(sub));
   else throw new Error(`Unknown option "${sub}". Try: clear, up, down, 0-5, off, on.`);
   return wantedStatus();
+});
+
+/** A clear spot for a new car near the player: ahead first, then to the sides, then behind. */
+function spawnSpot() {
+  const from = player.inVehicle ? player.vehicle : player.ped;
+  const h = from.heading;
+  const fwd = new THREE.Vector2(Math.sin(h), Math.cos(h));
+  const right = new THREE.Vector2(-fwd.y, fwd.x);
+  const R = 2.6; // clearance around the new car's centre
+  for (const dist of [6, 9, 12]) {
+    for (const [f, r] of [[1, 0], [0, 1], [0, -1], [-1, 0]]) {
+      const ahead = player.inVehicle && f === 1 ? dist + 4 : dist; // leave room in front of a moving car
+      const x = from.position.x + (fwd.x * f + right.x * r) * ahead;
+      const z = from.position.y + (fwd.y * f + right.y * r) * ahead;
+      if (offIsland(x, z)) continue;
+      if (world.query(x, z).some((b) => x > b.minX - R && x < b.maxX + R && z > b.minZ - R && z < b.maxZ + R)) continue;
+      if (allCars().some((c) => c.active && Math.hypot(c.position.x - x, c.position.y - z) < 5)) continue;
+      return { x, z, heading: h };
+    }
+  }
+  return null;
+}
+
+const modelList = () => Object.keys(MODELS).join(', ');
+devConsole.register('spawn', 'spawn <model | random> — park a car next to you (no model lists them)', ([name]) => {
+  if (!name) return `Models: ${modelList()}, random`;
+  const model = name === 'random' ? randomModel(rng) : name;
+  if (!MODELS[model]) throw new Error(`Unknown model "${name}". Models: ${modelList()}, random`);
+  const spot = spawnSpot();
+  if (!spot) throw new Error('No room to spawn a car here — move somewhere more open.');
+  const car = new Car({ model });
+  car.respray(rng);
+  car.reset(spot.x, spot.z, spot.heading);
+  car.syncMesh();
+  scene.add(car.mesh);
+  player.freeCars.push(car);
+  return `Spawned a ${model}.`;
 });
 
 // Performance overlay: shown while the console is open, or pinned with `stats on`.

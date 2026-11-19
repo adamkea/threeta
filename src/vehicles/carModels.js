@@ -41,19 +41,19 @@ export const MODELS = {
     stripeChance: 0.6,
     damage: { hp: 600 }, // light and fragile
   },
-  // Compact European hatchback: short overhangs, long flat roof ending in a roof spoiler over an
-  // upright tailgate, thick C-pillars, and a slim black grille band joining the headlights.
-  golf: {
-    cfg: { length: 4.25, width: 1.95, maxSpeed: 36, engineAccel: 22 },
-    cabin: { rear: -0.445, roofRear: -0.39, roofFront: 0.03, front: 0.23, top: 1.08, width: 0.83 },
-    lamp: [0.5, 0.11], // slim, wide headlights
-    bPillar: true,
-    cPillar: 0.13, // painted C-pillar reaching this far (fraction of length) forward of the roof's rear edge
-    roofSpoiler: true,
-    grilleBand: true,
-    nose: 0.86,
-    tail: 0.92,
-    paints: [0xa8aeb6, 0xf4f4f0, 0x3a3e45, 0x2f5fa8, 0xc62a2a, 0x17181c],
+  // Modern mid-engine supercar: very low and wide, short nose, small cabin pushed forward with a
+  // long rear deck ending in a ducktail lip, and slim headlights. Rare in traffic, and far faster
+  // than anything else.
+  supercar: {
+    cfg: { length: 4.6, width: 2.15, maxSpeed: 58, engineAccel: 32, grip: 10 },
+    cabin: { rear: -0.32, roofRear: -0.16, roofFront: 0.0, front: 0.19, top: 0.86, width: 0.7 },
+    bodyH: 0.48,
+    nose: 0.74,
+    tail: 0.94,
+    lamp: [0.46, 0.08], // slim, swept headlights
+    ducktail: true,
+    paints: [0xf27a1a, 0x9bd43a, 0xffc414, 0xe0281e, 0x111216, 0xf4f4f0, 0x2f6fd0],
+    stripeChance: 0.25,
   },
   van: {
     cfg: { length: 5.0, width: 2.2, maxSpeed: 28, engineAccel: 15 },
@@ -103,8 +103,8 @@ const TRAFFIC_MIX = [
   ['van', 12],
   ['pickup', 12],
   ['sports', 8],
-  ['golf', 10],
   ['police', 4],
+  ['supercar', 1], // about 1% of traffic: a lucky find
 ];
 export function randomModel(rng) {
   let r = rng.range(0, TRAFFIC_MIX.reduce((s, [, w]) => s + w, 0));
@@ -337,16 +337,6 @@ export function buildCarMesh(name, color) {
     streak.rotation.set(tilt, 0.35, 0, 'YXZ');
   }
 
-  // Thick painted C-pillars: solid panels over the rear of the glasshouse on each side.
-  if (m.cPillar) {
-    const fz = (c.roofRear + m.cPillar) * L;
-    const prof = [pts[0], pts[1], [fz, c.top], [fz - 0.25, base]];
-    const shape = new THREE.Shape(prof.map(([z, y]) => new THREE.Vector2(z, y)));
-    const geo = new THREE.ExtrudeGeometry(shape, { depth: 0.05, bevelEnabled: true, bevelThickness: 0.02, bevelSize: 0.02, bevelSegments: 1 });
-    geo.translate(0, 0, -0.025).rotateY(-Math.PI / 2);
-    for (const sx of [-1, 1]) add(geo, roofPaint, sx * (cabinW / 2 + 0.07), 0, 0);
-  }
-
   // Wing mirrors at the base of the A pillars.
   for (const s of [-1, 1]) looseAdd(g.mirror, paint, s * (cabinW / 2 + 0.2), base + 0.12, pts[3][0] - 0.25);
 
@@ -386,16 +376,9 @@ export function buildCarMesh(name, color) {
     for (const s of [-1, 1]) add(new THREE.BoxGeometry(0.08, 0.3, 0.12), S.dark, s * (W / 2 - 0.45), T + 0.14, -L / 2 + 0.3);
     looseAdd(new RoundedBoxGeometry(W * 0.78, 0.07, 0.36, 2, 0.03), paint, 0, T + 0.31, -L / 2 + 0.3);
   }
-  if (m.roofSpoiler) {
-    looseAdd(new RoundedBoxGeometry(cabinW + 0.04, 0.07, 0.34, 2, 0.03), roofPaint, 0, c.top + 0.09, c.roofRear * L - 0.08);
-  }
-  if (m.grilleBand) {
-    // Slim black band running headlight to headlight, a chrome line through it and a round badge.
-    add(new RoundedBoxGeometry(lampX * 2 + 0.3, 0.13, 0.06, 2, 0.03), S.grille, 0, lampY, L / 2 - 0.03);
-    add(plane(lampX * 2 - 0.4, 0.025), S.chrome, 0, lampY + 0.02, L / 2 + 0.005, body, false);
-    add(new THREE.CylinderGeometry(0.08, 0.08, 0.04, 16).rotateX(Math.PI / 2), S.chrome, 0, lampY, L / 2 + 0.01);
-    // Wide lower intake in the bumper.
-    add(plane(W * 0.55, 0.1), S.grille, 0, bumperY + 0.06, L / 2 + 0.1, body, false);
+  if (m.ducktail) {
+    // Low lip along the trailing edge of the rear deck, in body colour.
+    add(new RoundedBoxGeometry(W * 0.86, 0.08, 0.28, 2, 0.03), paint, 0, T + 0.04, -L / 2 + 0.18);
   }
   if (m.taxiSign) {
     looseAdd(new RoundedBoxGeometry(0.85, 0.26, 0.32, 2, 0.06), S.sign, 0, c.top + 0.25, roofZ);
