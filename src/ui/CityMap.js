@@ -114,6 +114,38 @@ export class CityMap {
       g.fillRect(...rr);
       g.strokeRect(...rr);
     }
+    this.drawLandmarks(g, size, s);
+  }
+
+  /** Police station (blue badge with a star) and hospital (white badge with a red cross). */
+  drawLandmarks(g, size, s) {
+    for (const { kind, footprint: f } of this.city.landmarks) {
+      const [cx, cy] = this.toPx((f.minX + f.maxX) / 2, (f.minZ + f.maxZ) / 2, size);
+      const r = 8 * s;
+      g.beginPath();
+      g.arc(cx, cy, r, 0, Math.PI * 2);
+      g.fillStyle = kind === 'police' ? '#22385c' : '#ffffff';
+      g.fill();
+      g.lineWidth = Math.max(1.5, 0.6 * s);
+      g.strokeStyle = INK;
+      g.stroke();
+      if (kind === 'police') {
+        g.fillStyle = '#f2c230';
+        g.beginPath();
+        for (let i = 0; i < 10; i++) {
+          const a = -Math.PI / 2 + (i * Math.PI) / 5;
+          const rr = (i % 2 ? 0.27 : 0.65) * r;
+          g.lineTo(cx + Math.cos(a) * rr, cy + Math.sin(a) * rr);
+        }
+        g.closePath();
+        g.fill();
+      } else {
+        const t = r * 0.42, l = r * 1.3;
+        g.fillStyle = '#d23a2f';
+        g.fillRect(cx - t / 2, cy - l / 2, t, l);
+        g.fillRect(cx - l / 2, cy - t / 2, l, t);
+      }
+    }
   }
 
   /** Parking lots: road-coloured with bay lines and a big "P" so they're easy to find. */

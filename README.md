@@ -23,7 +23,7 @@ Controls:
 Everyone on foot has health (`src/combat/Health.js`): the player 100, civilians 60, gang members and
 cops 100. Getting hit by a car hurts in proportion to its speed (fast hits kill). Your health bar sits
 under the wanted stars, and the screen edges flash red when you're hurt. Die and you're **FLATLINED**:
-you respawn back at the start with full health and a clean record. Bodies stay on the street for a while.
+you wake up outside the **hospital** with full health and a clean record. Bodies stay on the street for a while.
 
 You start with a holstered pistol (12-round mag, 60 spare). With a gun out you face the mouse cursor
 and can strafe. Bullets are instant hitscan rays stopped by the first person, car or building in the way.
@@ -72,7 +72,7 @@ Crimes raise a 0–5 star wanted level (top right): running people over (cops co
 ramming patrol cars, stealing a police car, and carjacking where a cop can see you. While the police
 chase you the level creeps up. Patrol cars (sirens flashing) come at you from out of view, cut you off and
 ram you. Stop, or go on foot, and an officer jumps out to make the arrest. Beat cops nearby join in on foot.
-Get caught and you're **BUSTED**: you lose the car and start again with a clean record. To get away, break
+Get caught and you're **BUSTED**: you lose the car and walk out of the **police station** with a clean record. To get away, break
 line of sight and keep your distance. The stars flash, and a bar fills until the police give up.
 
 ## Look
@@ -86,6 +86,7 @@ edges and boosts saturation. Roads have double-yellow centre lines, stop lines a
 - `src/main.js` – renderer, lighting, fixed-step game loop
 - `src/world/City.js` – procedural seeded city grid (roads, markings, buildings, parks, lamps) + AABB colliders
 - `src/vehicles/Car.js` – arcade car physics (grip/drift, steering, collisions) and mesh
+- `src/world/Landmarks.js` – special whole-block buildings: the police station (where you end up when busted) and the hospital (where you end up when you die); which blocks they sit on, their meshes, signs, roof markings and respawn points
 - `src/vehicles/damage.js` / `VehicleDamageSystem.js` – damage states for every vehicle; smoke, fire, explosions
 - `src/world/ColliderGrid.js` – spatial hash so cars only test nearby static colliders
 - `src/traffic/RoadNetwork.js` – lane geometry helpers over the intersection grid (right-hand traffic)
