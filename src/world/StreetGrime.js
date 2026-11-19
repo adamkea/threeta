@@ -81,7 +81,7 @@ function weighted(rng, table) {
   return Object.keys(table)[0];
 }
 
-const ROAD_DECALS = { oil: 5, stain: 2, crack: 3, patch: 1.5, grime: 2, puddle: 0.6, tag: 0.25, glass: 0.4, paper: 0.3 };
+const ROAD_DECALS = { oil: 5, crack: 2, patch: 1, puddle: 0.4 };
 const WALK_DECALS = { gum: 3, butts: 2, stain: 3, litter: 2.5, crack: 2, grime: 2, cup: 1, paper: 1, pizza: 0.5, glass: 0.4, puddle: 0.4, tag: 0.4 };
 const GUTTER_DECALS = { litter: 3, grime: 3, butts: 1, cup: 1, paper: 1, glass: 0.5, puddle: 1 };
 
@@ -95,7 +95,7 @@ function dressRoads(rng, ground, props, steam, colliders) {
     const at = (along, lat) => [A.x + e.dx * along + rx * lat, A.z + e.dz * along + rz * lat];
     const roadAngle = Math.atan2(e.dz, e.dx);
 
-    const n = Math.round((a1 - a0) / 7);
+    const n = Math.round((a1 - a0) / 22);
     for (let i = 0; i < n; i++) {
       const kind = weighted(rng, ROAD_DECALS);
       const along = rng.range(a0, a1);
@@ -123,7 +123,7 @@ function dressRoads(rng, ground, props, steam, colliders) {
 
     // Grime and litter washed into the gutters.
     for (const side of [-1, 1]) {
-      for (let i = 0, m = Math.round((a1 - a0) / 9); i < m; i++) {
+      for (let i = 0, m = Math.round((a1 - a0) / 18); i < m; i++) {
         const kind = weighted(rng, GUTTER_DECALS);
         const [x, z] = at(rng.range(a0, a1), side * (e.hw - rng.range(0.4, 0.8)));
         const s = rng.range(0.8, 1.6);
@@ -139,7 +139,7 @@ function dressRoads(rng, ground, props, steam, colliders) {
     }
 
     // Manholes in the lanes; some breathe steam, a few through an orange-and-white stack.
-    for (let i = 0, m = e.len > 30 ? rng.int(1, 2) : rng.int(0, 1); i < m; i++) {
+    for (let i = 0, m = e.len > 40 ? 1 : rng.int(0, 1); i < m; i++) {
       const along = rng.range(a0, a1);
       if (rng.chance(0.07)) {
         const [x, z] = at(along, rng.pick([-1, 1]) * (e.hw - 1.1));

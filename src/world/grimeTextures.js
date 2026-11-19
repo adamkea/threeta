@@ -92,14 +92,13 @@ function crackLine(ctx, x, y, a, len, w, rng, depth = 0) {
 const GROUND_DRAW = {
   oil(ctx, w, h, rng) {
     const g = ctx.createRadialGradient(w / 2, h / 2, 4, w / 2, h / 2, w * 0.46);
-    g.addColorStop(0, 'rgba(12,10,10,0.75)');
-    g.addColorStop(0.55, 'rgba(20,18,20,0.45)');
+    g.addColorStop(0, 'rgba(12,10,10,0.45)');
+    g.addColorStop(0.55, 'rgba(20,18,20,0.25)');
     g.addColorStop(1, 'rgba(20,18,20,0)');
     ctx.fillStyle = g;
     ctx.beginPath();
     ctx.ellipse(w / 2, h / 2, w * 0.46, h * 0.36, 0.3, 0, Math.PI * 2);
     ctx.fill();
-    blob(ctx, w * 0.5, h * 0.5, w * 0.22, rng, 'rgba(10,8,8,0.35)', 6);
     // Faint rainbow sheen.
     ctx.strokeStyle = 'rgba(120,90,160,0.25)';
     ctx.lineWidth = 3;
