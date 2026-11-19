@@ -7,7 +7,7 @@ import { ColliderGrid } from './world/ColliderGrid.js';
 import { TrafficLights } from './traffic/TrafficLights.js';
 import { TrafficSystem } from './traffic/TrafficSystem.js';
 import { resolveCarCollisions } from './physics/carCollisions.js';
-import { resolvePedCarCollisions } from './physics/pedCollisions.js';
+import { resolvePedCarCollisions, resolvePedPedCollisions } from './physics/pedCollisions.js';
 import { Pedestrian } from './characters/Pedestrian.js';
 import { NpcManager, disposeObject } from './characters/NpcManager.js';
 import { PlayerController } from './player/PlayerController.js';
@@ -63,6 +63,9 @@ const player = new PlayerController({ ped: playerPed, car: playerCar, traffic, n
 const allCars = () => player.freeCars.concat(traffic.cars);
 const allPeds = () => (player.ped.active ? [player.ped] : []).concat(npcs.peds);
 traffic.populate({ x: SPAWN.x, z: SPAWN.z }, allCars());
+npcs.populate({ x: SPAWN.x, z: SPAWN.z });
+// Drivers only need to watch for people who are actually in the road.
+const onRoad = (p) => groundHeight(p.position.x, p.position.y) === 0;
 
 // --- Camera, input, HUD ---
 const input = new Input();
@@ -95,12 +98,13 @@ function resetPlayer() {
 function step(dt) {
   const cars = allCars();
   const peds = allPeds();
-  player.step(dt, input, world);
-  traffic.step(dt, cars, world, peds);
-  npcs.step(dt, world);
   const active = cars.filter((c) => c.active);
+  player.step(dt, input, world);
+  traffic.step(dt, cars, world, peds.filter(onRoad));
+  npcs.step(dt, world, peds, active, lights);
   resolveCarCollisions(active);
   resolvePedCarCollisions(peds, active);
+  resolvePedPedCollisions(peds);
 }
 
 // Dev-only hook for debugging / automated tests.

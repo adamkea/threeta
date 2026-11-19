@@ -34,3 +34,28 @@ export function resolvePedCarCollisions(peds, cars) {
     }
   }
 }
+
+/** Keeps people from walking through each other (equal push, no knockdown). */
+export function resolvePedPedCollisions(peds) {
+  for (let a = 0; a < peds.length; a++) {
+    const p = peds[a];
+    if (!p.active) continue;
+    for (let b = a + 1; b < peds.length; b++) {
+      const q = peds[b];
+      if (!q.active) continue;
+      let nx = q.position.x - p.position.x;
+      let nz = q.position.y - p.position.y;
+      const r = p.radius + q.radius;
+      const d2 = nx * nx + nz * nz;
+      if (d2 >= r * r) continue;
+      const d = Math.sqrt(d2);
+      if (d < 1e-5) (nx = 1), (nz = 0);
+      else (nx /= d), (nz /= d);
+      const push = (r - d) / 2;
+      p.position.x -= nx * push;
+      p.position.y -= nz * push;
+      q.position.x += nx * push;
+      q.position.y += nz * push;
+    }
+  }
+}

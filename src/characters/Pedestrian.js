@@ -4,6 +4,9 @@ const WALK_SPEED = 4.2;
 const RUN_SPEED = 8;
 const ACCEL = 30;
 const RADIUS = 0.4;
+const BASE_SCALE = 1.35; // exaggerated so people read clearly from the high camera
+
+export { WALK_SPEED, RUN_SPEED };
 
 /**
  * A person on foot (player or NPC). Same 2D conventions as Car: position/velocity are
@@ -20,7 +23,17 @@ export class Pedestrian {
     this.fall = 0; // 0 standing .. 1 lying flat (animated)
     this.stride = 0;
     this.groundY = 0;
+    this.justKnocked = false; // set on knockdown; observers (e.g. NpcManager) clear it
     this.mesh = this.#buildMesh(shirt, pants, skin, hair);
+  }
+
+  /** Recolour in place (lets pooled NPCs get a new look without rebuilding the mesh). */
+  setLook({ shirt, pants, skin, hair, scale = 1 }) {
+    this.mats.shirt.color.set(shirt);
+    this.mats.pants.color.set(pants);
+    this.mats.skin.color.set(skin);
+    this.mats.hair.color.set(hair);
+    this.mesh.scale.setScalar(BASE_SCALE * scale);
   }
 
   get speed() {
@@ -77,6 +90,7 @@ export class Pedestrian {
   knockDown(impulse) {
     this.velocity.copy(impulse);
     this.downTime = 2.2;
+    this.justKnocked = true;
     if (impulse.lengthSq() > 0.01) this.heading = Math.atan2(-impulse.x, -impulse.y); // fall backwards
   }
 
@@ -123,11 +137,12 @@ export class Pedestrian {
 
   #buildMesh(shirt, pants, skin, hair) {
     const root = new THREE.Group();
-    root.scale.setScalar(1.35); // exaggerated so people read clearly from the high camera
+    root.scale.setScalar(BASE_SCALE);
     const body = new THREE.Group(); // pivots at the feet for falling over
     root.add(body);
     this.body = body;
     const mat = (c) => new THREE.MeshLambertMaterial({ color: c });
+    this.mats = { shirt: mat(shirt), pants: mat(pants), skin: mat(skin), hair: mat(hair) };
     const box = (w, h, d, m) => {
       const mesh = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), m);
       mesh.castShadow = true;
@@ -143,20 +158,20 @@ export class Pedestrian {
       pivot.add(part);
       return pivot;
     };
-    this.legL = limb(0.15, 0.85, 0.22, 0.85, mat(pants));
-    this.legR = limb(-0.15, 0.85, 0.22, 0.85, mat(pants));
+    this.legL = limb(0.15, 0.85, 0.22, 0.85, this.mats.pants);
+    this.legR = limb(-0.15, 0.85, 0.22, 0.85, this.mats.pants);
     body.add(this.legL, this.legR);
 
     const torso = new THREE.Group();
     torso.position.y = 1.15;
     this.torso = torso;
     body.add(torso);
-    const shirtMat = mat(shirt);
+    const shirtMat = this.mats.shirt;
     const chest = box(0.55, 0.65, 0.3, shirtMat);
     chest.position.y = 0.05;
-    const head = box(0.3, 0.32, 0.3, mat(skin));
+    const head = box(0.3, 0.32, 0.3, this.mats.skin);
     head.position.y = 0.58;
-    const hairMesh = box(0.32, 0.1, 0.32, mat(hair));
+    const hairMesh = box(0.32, 0.1, 0.32, this.mats.hair);
     hairMesh.position.y = 0.76;
     torso.add(chest, head, hairMesh);
     this.armL = limb(0.36, 0.33, 0.15, 0.6, shirtMat);

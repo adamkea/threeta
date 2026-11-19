@@ -27,8 +27,9 @@ Controls:
 - `src/traffic/TrafficSystem.js` – pooled AI cars spawned out of view around the player and recycled when far away
 - `src/physics/carCollisions.js` – car-vs-car impulses with spin
 - `src/characters/Pedestrian.js` – person on foot: movement, collisions, walk/run animation, knockdown
-- `src/characters/NpcManager.js` – non-player people (currently: drivers fleeing a carjacking)
+- `src/characters/NpcManager.js` – pooled pedestrians around the player: stroll the sidewalks, cross at zebra crossings on a green, dodge oncoming cars, scatter when someone gets run over; carjacked drivers flee then calm down
+- `src/characters/Sidewalks.js` – pedestrian walk graph (block-corner waypoints, crossings tied to junction lights)
 - `src/player/PlayerController.js` – player state: driving vs on foot, entering/exiting/hijacking cars
-- `src/physics/pedCollisions.js` – people vs cars (shoved, or knocked down by fast impacts)
+- `src/physics/pedCollisions.js` – people vs cars (shoved, or knocked down by fast impacts) and people vs people
 - `src/core/CameraRig.js` – high, angled, north-up follow camera with look-ahead and speed zoom
 - `src/core/Input.js` – keyboard input
