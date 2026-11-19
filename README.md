@@ -1,6 +1,7 @@
 # Threeta
 
 Top-down open-city driving game built with three.js, inspired by the overhead view of GTA: Chinatown Wars.
+You start in a silver compact hatchback, Golf-style.
 
 ## Run
 
@@ -14,6 +15,15 @@ Controls:
 - **On foot:** **WASD / arrows** move (screen-relative), **Shift** run
 - **F / Enter** get in or out of a car — works on traffic too (the driver gets thrown out and runs off)
 - **R** reset
+
+## Wanted level
+
+Crimes raise a 0–5 star wanted level (top right): running people over (cops count for a lot more),
+ramming patrol cars, stealing a police car, and carjacking where a cop can see you. While the police
+chase you the level creeps up. Patrol cars (sirens flashing) come at you from out of view, cut you off and
+ram you. Stop, or go on foot, and an officer jumps out to make the arrest. Beat cops nearby join in on foot.
+Get caught and you're **BUSTED**: you lose the car and start again with a clean record. To get away, break
+line of sight and keep your distance. The stars flash, and a bar fills until the police give up.
 
 ## Look
 
@@ -38,5 +48,9 @@ edges and boosts saturation. Roads have double-yellow centre lines, stop lines a
 - `src/characters/Sidewalks.js` – pedestrian walk graph (block-corner waypoints, crossings tied to junction lights)
 - `src/player/PlayerController.js` – player state: driving vs on foot, entering/exiting/hijacking cars
 - `src/physics/pedCollisions.js` – people vs cars (shoved, or knocked down by fast impacts) and people vs people
+- `src/police/Wanted.js` – crimes → heat → stars; evasion timer while out of sight
+- `src/police/PoliceSystem.js` – spawns/retires patrol cars by wanted level, pulls patrol cars out of traffic, deploys officers, sends beat cops after you, decides arrests
+- `src/police/PursuitDriver.js` – police driving: junction-to-junction navigation over the road grid toward you, then straight at you (leading your movement) when in view; three-point turns and backing out when stuck
+- `src/police/sight.js` – line-of-sight test against buildings
 - `src/core/CameraRig.js` – high, angled, north-up follow camera with look-ahead and speed zoom
 - `src/core/Input.js` – keyboard input

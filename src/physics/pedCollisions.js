@@ -1,7 +1,10 @@
 const KNOCKDOWN_SPEED = 5; // m/s closing speed at which a car knocks a person over
 
-/** Pushes pedestrians out of cars; fast impacts knock them down. Cars barely notice. */
-export function resolvePedCarCollisions(peds, cars) {
+/**
+ * Pushes pedestrians out of cars; fast impacts knock them down. Cars barely notice.
+ * `onKnockdown(ped, car)` is called for each person a car knocks over.
+ */
+export function resolvePedCarCollisions(peds, cars, onKnockdown = null) {
   for (const p of peds) {
     if (!p.active) continue;
     for (const car of cars) {
@@ -19,11 +22,14 @@ export function resolvePedCarCollisions(peds, cars) {
 
         const closing = (car.velocity.x - p.velocity.x) * nx + (car.velocity.y - p.velocity.y) * nz;
         if (closing <= 0) continue;
-        if (closing > KNOCKDOWN_SPEED && !p.isDown) {
+        // Only the car's own motion knocks people over — running into a parked car doesn't.
+        const carClosing = car.velocity.x * nx + car.velocity.y * nz;
+        if (closing > KNOCKDOWN_SPEED && carClosing > KNOCKDOWN_SPEED * 0.6 && !p.isDown) {
           const impulse = car.velocity.clone().multiplyScalar(0.7);
           impulse.x += nx * closing * 0.5;
           impulse.y += nz * closing * 0.5;
           p.knockDown(impulse);
+          onKnockdown?.(p, car);
           car.velocity.multiplyScalar(0.94);
         } else {
           // Shoved along at the car's speed.

@@ -3,7 +3,7 @@ import { Pedestrian } from './Pedestrian.js';
 import { groundHeight } from '../world/City.js';
 import { SIZE, coord, crossingOf, isValid, nearestIndex, neighbours } from './Sidewalks.js';
 
-import { civilianLook, rollPerson } from './outfits.js';
+import { civilianLook, copLook, rollPerson } from './outfits.js';
 
 const STAND = new THREE.Vector2();
 
@@ -56,7 +56,33 @@ export class NpcManager {
   }
 
   /**
-   * One fixed step for every NPC. `peds` = everyone on foot (incl. the player), `cars` = active cars.
+   * Spawn a police officer at (x, z), e.g. jumping out of a patrol car. Returns the NPC so the
+   * caller (PoliceSystem) can steer it with `n.busy` / `n.goal`.
+   */
+  spawnCop(x, z, heading = 0) {
+    const n = this.#acquire({ role: 'cop', gang: null, look: copLook(this.rng) });
+    n.ped.reset(x, z, heading);
+    n.state = 'goto';
+    n.busy = true;
+    return n;
+  }
+
+  /** Remove an NPC from the world right away (e.g. an officer getting back into their car). */
+  dismiss(n) {
+    this.#release(n);
+  }
+
+  /** Hand a busy NPC back to the ambient AI: they carry on walking the sidewalks. */
+  release(n) {
+    n.busy = false;
+    n.goal = null;
+    n.unit = null;
+    this.#resnap(n);
+  }
+
+  /**
+   * One fixed step for every NPC. NPCs with `busy` set are being driven by someone else: they
+   * run to `n.goal` ({x, y}, at `n.goalSpeed`) and ignore their own fear and wandering. `peds` = everyone on foot (incl. the player), `cars` = active cars.
    */
   step(dt, world, peds, cars, lights) {
     const npcs = this.active;
@@ -66,6 +92,7 @@ export class NpcManager {
       if (!p.justKnocked) continue;
       p.justKnocked = false;
       for (const n of npcs) {
+        if (n.busy) continue;
         _v.subVectors(n.ped.position, p.position);
         const d = _v.length();
         if (d > SCARE_RADIUS) continue;
@@ -78,7 +105,23 @@ export class NpcManager {
       const p = n.ped;
       if (p.isDown) {
         p.update(dt, STAND, false, world);
-        n.state = 'recover';
+        if (!n.busy) n.state = 'recover';
+        continue;
+      }
+      if (n.busy) {
+        // Externally directed (police chasing the player): head straight for the goal.
+        if (n.goal) {
+          _move.set(n.goal.x - p.position.x, n.goal.y - p.position.y);
+          const d = _move.length();
+          if (d > 0.6) _move.multiplyScalar(Math.min(1, d / 2) * (n.goalSpeed ?? 1) / d);
+          else _move.set(0, 0);
+          // Wedged against a wall: veer off to one side for a moment to get round it.
+          n.stuck = p.speed < 0.8 && d > 2 ? n.stuck + dt : 0;
+          if (n.stuck > 0.4) (n.detour = 0.7), (n.detourSide = this.rng.chance(0.5) ? 1 : -1), (n.stuck = 0);
+          if (n.detour > 0) (n.detour -= dt), _move.rotateAround(STAND, n.detourSide * 1.3);
+          p.update(dt, _move, true, world);
+        } else p.update(dt, STAND, false, world);
+        n.stateTime += dt;
         continue;
       }
       if (n.state === 'recover') this.#flee(n, _v.set(this.rng.range(-1, 1), this.rng.range(-1, 1)).normalize(), 3);
@@ -267,6 +310,9 @@ export class NpcManager {
     n.ped.gang = person.gang;
     Object.assign(n, {
       active: true,
+      busy: false,
+      goal: null,
+      unit: null,
       role: person.role,
       gang: person.gang,
       inset: rng.range(1.8, 2.4),

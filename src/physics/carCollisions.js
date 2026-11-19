@@ -1,8 +1,9 @@
 /**
  * Resolves car-vs-car overlaps (each car = two circles) with an equal-mass impulse,
- * plus a bit of spin so glancing hits rotate the cars.
+ * plus a bit of spin so glancing hits rotate the cars. `onHit(a, b, impulse)` is told about
+ * every impact (used to spot the player ramming police).
  */
-export function resolveCarCollisions(cars, restitution = 0.3) {
+export function resolveCarCollisions(cars, restitution = 0.3, onHit = null) {
   for (let i = 0; i < cars.length; i++) {
     const a = cars[i];
     for (let j = i + 1; j < cars.length; j++) {
@@ -30,6 +31,7 @@ export function resolveCarCollisions(cars, restitution = 0.3) {
           a.velocity.y -= nz * jImp;
           b.velocity.x += nx * jImp;
           b.velocity.y += nz * jImp;
+          onHit?.(a, b, jImp);
 
           // Torque about +Y: tau = lz*Fx - lx*Fz, with lever from car centre to contact.
           const cx = (ax + bx) / 2;

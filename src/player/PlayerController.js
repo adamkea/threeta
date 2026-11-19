@@ -16,6 +16,8 @@ export class PlayerController {
     this.traffic = traffic;
     this.npcs = npcs;
     this.scene = scene;
+    this.police = null; // PoliceSystem, once it exists (patrol cars can be stolen too)
+    this.onCarjack = null; // (car) => void: told whenever the player takes a car that had a driver
     /** Non-AI cars in the world: ones the player owns, has driven, or abandoned. */
     this.freeCars = [car];
     ped.active = false;
@@ -56,6 +58,12 @@ export class PlayerController {
       this.traffic.release(car);
       this.freeCars.push(car);
       this.npcs.spawnFleeing(spot.x, spot.y, this.ped.position, car.position);
+      this.onCarjack?.(car);
+    } else if (this.police?.owns(car)) {
+      // Stealing a patrol car (an officer at the wheel gets thrown out — and gives chase).
+      this.police.surrender(car, this.#sideSpot(car, -1));
+      this.freeCars.push(car);
+      this.onCarjack?.(car);
     }
     this.vehicle = car;
     this.ped.active = false;
@@ -63,9 +71,14 @@ export class PlayerController {
     return true;
   }
 
-  #exit(world) {
+  /** Get out of the car whatever its speed (e.g. being arrested). */
+  forceExit(world) {
+    return this.inVehicle && this.#exit(world, true);
+  }
+
+  #exit(world, force = false) {
     const car = this.vehicle;
-    if (car.speed > MAX_EXIT_SPEED) return false;
+    if (car.speed > MAX_EXIT_SPEED && !force) return false;
     // Prefer the driver's (left) side, then passenger side, then front/back.
     const candidates = [this.#sideSpot(car, -1), this.#sideSpot(car, 1), this.#endSpot(car, 1), this.#endSpot(car, -1)];
     const spot = candidates.find((p) => !blocked(world, p, this.ped.radius)) ?? candidates[0];
