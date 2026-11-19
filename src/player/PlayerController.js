@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { WEAPONS, Weapon } from '../combat/weapons.js';
+import { overlaps } from '../world/colliders.js';
 
 const ENTER_RANGE = 3.6; // max distance from the person to a car's centre to get in
 const MAX_ENTER_SPEED = 5; // can't jump into cars moving faster than this (m/s)
@@ -180,5 +181,5 @@ export class PlayerController {
 function blocked(world, p, r) {
   return world
     .query(p.x, p.y)
-    .some((b) => p.x > b.minX - r && p.x < b.maxX + r && p.y > b.minZ - r && p.y < b.maxZ + r);
+    .some((b) => overlaps(b, p.x, p.y, r));
 }

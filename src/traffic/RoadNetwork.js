@@ -1,33 +1,12 @@
-import { CITY, roadCenter } from '../world/City.js';
+import { LAYOUT } from '../world/CityLayout.js';
 
-// Intersections are grid nodes (i, j) with i, j in 0..CITY.blocks. Cars drive on the right.
-export const HALF_ROAD = CITY.roadWidth / 2;
-export const LANE_OFFSET = 3.5; // lane centre distance from the road centre line
-export const STOP_DIST = HALF_ROAD + 3.5; // node centre -> stop line (just before the crosswalk)
-export const EXIT_DIST = HALF_ROAD + 2; // node centre -> where a turn finishes
-export const DIRS = [
-  [1, 0],
-  [-1, 0],
-  [0, 1],
-  [0, -1],
-];
+// Driving on the road graph (see CityLayout.js). Cars drive on the right, one lane each way.
+// A car's route is a sequence of half-edges: half-edge h runs from node graph.from(h) to
+// graph.to(h); its lane sits `edge.lane` metres right of the centre line.
+export const GRAPH = LAYOUT.graph;
 
-export const nodeX = (i) => roadCenter(i);
-
-/**
- * Inclusive range [lo, hi] of node indices along one axis whose road segments (node to next
- * node) can pass within `maxD` of coordinate `v`, or null if none do. Lets spawners pick
- * random roads near the player instead of anywhere in the city.
- */
-export function nodeRange(v, maxD) {
-  const lo = Math.max(0, Math.floor((v - maxD - nodeX(0)) / CITY.cell) - 1);
-  const hi = Math.min(CITY.blocks, Math.ceil((v + maxD - nodeX(0)) / CITY.cell) + 1);
-  return lo <= hi ? [lo, hi] : null;
-}
-
-export function isValidNode(i, j) {
-  return i >= 0 && j >= 0 && i <= CITY.blocks && j <= CITY.blocks;
-}
+export const STOP_GAP = 3.5; // junction edge (setback) -> stop line, just before the crosswalk
+export const EXIT_GAP = 2; // junction edge -> where a turn finishes
 
 /** Right-hand side of a travel direction on the XZ plane (matches Car.right). */
 export function rightOf([dx, dz]) {
@@ -39,7 +18,30 @@ export function headingOf([dx, dz]) {
   return Math.atan2(dx, dz);
 }
 
-/** 'x' if travelling along the X axis, else 'z'. */
-export function axisOf([dx]) {
-  return dx !== 0 ? 'x' : 'z';
+/** Distance from h's start node to its stop line at the far end. */
+export function stopAlong(h) {
+  return GRAPH.edge(h).len - GRAPH.setbackEnd(h) - STOP_GAP;
+}
+
+/** World point `s` metres along half-edge h's lane (from its start node), plus its direction. */
+export function lanePoint(h, s) {
+  const d = GRAPH.dir(h);
+  const A = GRAPH.nodes[GRAPH.from(h)];
+  const lane = GRAPH.edge(h).lane;
+  return { x: A.x + d[0] * s - d[1] * lane, z: A.z + d[1] * s + d[0] * lane, d };
+}
+
+/**
+ * Picks a random spot in a lane within `maxD` of (x, z): a half-edge and a distance along it,
+ * clear of both junctions. Returns { h, s, x, z, d } or null.
+ */
+export function randomLaneSpot(rng, x, z, maxD) {
+  const ids = GRAPH.edgesNear(x, z, maxD);
+  if (!ids.length) return null;
+  const h = rng.pick(ids) * 2 + (rng.chance(0.5) ? 1 : 0);
+  const s0 = GRAPH.setbackStart(h) + 6;
+  const s1 = stopAlong(h) - 4;
+  if (s1 <= s0) return null;
+  const s = rng.range(s0, s1);
+  return { h, s, ...lanePoint(h, s) };
 }

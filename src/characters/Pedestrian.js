@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { offIsland, WATER_Y } from '../world/City.js';
+import { circlePush } from '../world/colliders.js';
 import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeometry.js';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { toon } from '../render/toon.js';
@@ -365,21 +366,9 @@ export class Pedestrian {
   #collideStatic(world) {
     const r = this.radius;
     for (const b of world.query(this.position.x, this.position.y)) {
-      const cx = this.position.x, cz = this.position.y;
-      const px = Math.min(Math.max(cx, b.minX), b.maxX);
-      const pz = Math.min(Math.max(cz, b.minZ), b.maxZ);
-      let nx = cx - px, nz = cz - pz;
-      const d = Math.hypot(nx, nz);
-      if (d >= r) continue;
-      let depth;
-      if (d > 1e-6) {
-        nx /= d; nz /= d; depth = r - d;
-      } else {
-        const dl = cx - b.minX, dr = b.maxX - cx, dt = cz - b.minZ, db = b.maxZ - cz;
-        const m = Math.min(dl, dr, dt, db);
-        [nx, nz] = m === dl ? [-1, 0] : m === dr ? [1, 0] : m === dt ? [0, -1] : [0, 1];
-        depth = m + r;
-      }
+      const hit = circlePush(b, this.position.x, this.position.y, r);
+      if (!hit) continue;
+      const { nx, nz, depth } = hit;
       this.position.x += nx * depth;
       this.position.y += nz * depth;
       const vn = this.velocity.x * nx + this.velocity.y * nz;

@@ -1,3 +1,5 @@
+import { isSmall, overlaps } from '../world/colliders.js';
+
 /**
  * True if the straight line from (ax, az) to (bx, bz) doesn't pass through any building.
  * Samples the segment every couple of metres against the static collider grid; `margin`
@@ -11,8 +13,8 @@ export function clearLine(world, ax, az, bx, bz, margin = 0) {
     const x = ax + (bx - ax) * t;
     const z = az + (bz - az) * t;
     for (const b of world.query(x, z)) {
-      if (b.maxX - b.minX < 1.5 && b.maxZ - b.minZ < 1.5) continue; // lamp posts / trees don't block
-      if (x > b.minX - margin && x < b.maxX + margin && z > b.minZ - margin && z < b.maxZ + margin) return false;
+      if (isSmall(b)) continue; // lamp posts / trees don't block
+      if (overlaps(b, x, z, margin)) return false;
     }
   }
   return true;
