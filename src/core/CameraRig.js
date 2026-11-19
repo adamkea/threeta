@@ -16,6 +16,12 @@ export class CameraRig {
     this.initialised = false;
   }
 
+  /** Change zoom (e.g. closer on foot); the camera eases to it. */
+  setZoom(height, maxHeight) {
+    this.height = height;
+    this.maxHeight = maxHeight;
+  }
+
   update(dt, target) {
     const lead = new THREE.Vector3(target.velocity.x, 0, target.velocity.y).multiplyScalar(this.lookAhead);
     lead.clampLength(0, 16);

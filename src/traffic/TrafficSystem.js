@@ -11,6 +11,7 @@ const PAINTS = [0xf2f2f2, 0x2a2d34, 0x3a6ea5, 0xe0b23a, 0x6c8a4b, 0x8c2f39, 0xa9
  */
 export class TrafficSystem {
   constructor(scene, rng, lights, { count = 28, spawnMin = 85, spawnMax = 170, despawn = 200 } = {}) {
+    this.scene = scene;
     this.rng = rng;
     this.lights = lights;
     this.spawnMin = spawnMin;
@@ -18,13 +19,29 @@ export class TrafficSystem {
     this.despawn = despawn;
     this.cars = [];
     this.drivers = new Map();
-    for (let k = 0; k < count; k++) {
-      const car = new Car({ engineAccel: 12, maxSpeed: 20 });
-      car.active = false;
-      car.mesh.visible = false;
-      scene.add(car.mesh);
-      this.cars.push(car);
-    }
+    for (let k = 0; k < count; k++) this.cars.push(this.#createPooledCar());
+  }
+
+  #createPooledCar() {
+    const car = new Car({ engineAccel: 12, maxSpeed: 20 });
+    car.active = false;
+    car.mesh.visible = false;
+    this.scene.add(car.mesh);
+    return car;
+  }
+
+  /**
+   * Remove a car from AI control (e.g. the player hijacks it). It stays in the world but is no
+   * longer pooled; a fresh car takes its place in the pool so traffic density is unchanged.
+   */
+  release(car) {
+    const k = this.cars.indexOf(car);
+    if (k < 0) return;
+    this.drivers.delete(car);
+    car.ai = null;
+    this.cars[k] = this.#createPooledCar();
+    car.cfg.engineAccel = 20; // give it the full engine back now a player's driving it
+    car.cfg.maxSpeed = 34;
   }
 
   /** Fill the city immediately (used at start, so traffic isn't only off-screen). */
@@ -33,10 +50,10 @@ export class TrafficSystem {
   }
 
   /** Run AI and physics for one fixed step. */
-  step(dt, allCars, world) {
+  step(dt, allCars, world, peds) {
     for (const car of this.cars) {
       if (!car.active) continue;
-      const controls = this.drivers.get(car).update(dt, allCars, this.lights);
+      const controls = this.drivers.get(car).update(dt, allCars, this.lights, peds);
       car.update(dt, controls, world);
     }
   }
@@ -46,8 +63,10 @@ export class TrafficSystem {
     for (const car of this.cars) {
       if (car.active) {
         const d = Math.hypot(car.position.x - focus.x, car.position.y - focus.z);
-        const wreckedOffscreen = this.drivers.get(car).lost && d > 80;
-        if (d > this.despawn || wreckedOffscreen) {
+        const driver = this.drivers.get(car);
+        // Wrecked or hopelessly stuck cars vanish once nobody can see them.
+        const stuckOffscreen = (driver.lost || driver.waitTime > 20) && d > 80;
+        if (d > this.despawn || stuckOffscreen) {
           car.active = false;
           car.mesh.visible = false;
         }
@@ -76,7 +95,9 @@ export class TrafficSystem {
       car.reset(x, z, headingOf(d), 9);
       car.active = true;
       car.mesh.visible = true;
-      this.drivers.set(car, new TrafficDriver(car, this.rng, [i, j], d, x, z));
+      const driver = new TrafficDriver(car, this.rng, [i, j], d, x, z);
+      this.drivers.set(car, driver);
+      car.ai = driver; // lets other drivers read this car's intentions
       return true;
     }
     return false;

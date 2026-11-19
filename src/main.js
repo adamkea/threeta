@@ -1,12 +1,16 @@
 import * as THREE from 'three';
 import { Input } from './core/Input.js';
 import { CameraRig } from './core/CameraRig.js';
-import { createCity, roadCenter, CITY } from './world/City.js';
+import { createCity, roadCenter, groundHeight, CITY } from './world/City.js';
 import { Car } from './vehicles/Car.js';
 import { ColliderGrid } from './world/ColliderGrid.js';
 import { TrafficLights } from './traffic/TrafficLights.js';
 import { TrafficSystem } from './traffic/TrafficSystem.js';
 import { resolveCarCollisions } from './physics/carCollisions.js';
+import { resolvePedCarCollisions } from './physics/pedCollisions.js';
+import { Pedestrian } from './characters/Pedestrian.js';
+import { NpcManager, disposeObject } from './characters/NpcManager.js';
+import { PlayerController } from './player/PlayerController.js';
 import { createRng } from './core/random.js';
 
 const canvas = document.getElementById('game');
@@ -40,22 +44,33 @@ const city = createCity();
 scene.add(city.group);
 const world = new ColliderGrid(city.colliders);
 
-const car = new Car({ color: 0xd23b2f });
-const spawn = () => car.reset(roadCenter(Math.floor(CITY.blocks / 2)) + 3.5, roadCenter(CITY.blocks / 2) + 20, Math.PI);
-spawn();
-scene.add(car.mesh);
+const SPAWN = { x: roadCenter(Math.floor(CITY.blocks / 2)) + 3.5, z: roadCenter(CITY.blocks / 2) + 20 };
+const playerCar = new Car({ color: 0xd23b2f });
+playerCar.reset(SPAWN.x, SPAWN.z, Math.PI);
+scene.add(playerCar.mesh);
 
-// --- Traffic ---
+// --- Traffic & people ---
 const rng = createRng(42);
 const lights = new TrafficLights(rng);
 scene.add(lights.mesh);
 const traffic = new TrafficSystem(scene, rng, lights);
-const allCars = [car, ...traffic.cars];
-traffic.populate({ x: car.position.x, z: car.position.y }, allCars);
+const npcs = new NpcManager(scene, rng);
 
+const playerPed = new Pedestrian({ shirt: 0xf5f5f5, pants: 0x23262e });
+scene.add(playerPed.mesh);
+const player = new PlayerController({ ped: playerPed, car: playerCar, traffic, npcs, scene });
+
+const allCars = () => player.freeCars.concat(traffic.cars);
+const allPeds = () => (player.ped.active ? [player.ped] : []).concat(npcs.peds);
+traffic.populate({ x: SPAWN.x, z: SPAWN.z }, allCars());
+
+// --- Camera, input, HUD ---
 const input = new Input();
 const rig = new CameraRig(camera);
+const ZOOM = { car: [85, 120], foot: [40, 46] };
+const speedBox = document.getElementById('speed');
 const speedEl = document.getElementById('speed-value');
+const promptEl = document.getElementById('prompt');
 
 function resize() {
   const w = window.innerWidth;
@@ -67,9 +82,30 @@ function resize() {
 window.addEventListener('resize', resize);
 resize();
 
+function resetPlayer() {
+  if (player.inVehicle) {
+    const c = player.vehicle;
+    c.reset(c.position.x, c.position.y, c.heading); // stop and un-spin in place
+  } else {
+    player.ped.reset(SPAWN.x - 9, SPAWN.z);
+  }
+}
+
+/** One fixed physics step for everything. */
+function step(dt) {
+  const cars = allCars();
+  const peds = allPeds();
+  player.step(dt, input, world);
+  traffic.step(dt, cars, world, peds);
+  npcs.step(dt, world);
+  const active = cars.filter((c) => c.active);
+  resolveCarCollisions(active);
+  resolvePedCarCollisions(peds, active);
+}
+
 // Dev-only hook for debugging / automated tests.
 if (import.meta.env.DEV) {
-  window.__game = { car, traffic, lights, world, allCars, STEP: 1 / 120, resolveCarCollisions };
+  window.__game = { player, traffic, npcs, lights, world, allCars, allPeds, step, input, STEP: 1 / 120 };
 }
 
 // --- Main loop: fixed-step physics, variable-rate rendering ---
@@ -81,27 +117,35 @@ function frame(now) {
   const dt = Math.min(0.1, (now - last) / 1000);
   last = now;
 
-  if (input.wasPressed('reset')) spawn();
+  if (input.wasPressed('reset')) resetPlayer();
+  if (input.wasPressed('use')) player.use(allCars(), world);
 
-  const controls = { throttle: input.throttle, steer: input.steer, handbrake: input.isDown('handbrake') };
   acc += dt;
   while (acc >= STEP) {
-    car.update(STEP, controls, world);
-    traffic.step(STEP, allCars, world);
-    resolveCarCollisions(allCars.filter((c) => c.active));
+    step(STEP);
     acc -= STEP;
   }
-  lights.update(dt);
-  car.syncMesh();
-  for (const c of traffic.cars) if (c.active) c.syncMesh();
-  traffic.manage(rig.focus, allCars);
-  rig.update(dt, car);
 
-  // Keep the shadow frustum centred on the action.
-  sun.target.position.copy(rig.focus);
+  // --- Per-frame bookkeeping & visuals ---
+  lights.update(dt);
+  for (const c of allCars()) if (c.active) c.syncMesh();
+  if (player.ped.active) {
+    player.ped.groundY = groundHeight(player.ped.position.x, player.ped.position.y);
+    player.ped.syncMesh(dt);
+  }
+  traffic.manage(rig.focus, allCars());
+  npcs.manage(dt, rig.focus);
+  player.manage(rig.focus, disposeObject);
+
+  rig.setZoom(...(player.inVehicle ? ZOOM.car : ZOOM.foot));
+  rig.update(dt, player.body);
+  sun.target.position.copy(rig.focus); // keep the shadow frustum on the action
   sun.position.copy(rig.focus).add(sunOffset);
 
-  speedEl.textContent = Math.round(car.speed * 3.6);
+  speedBox.style.visibility = player.inVehicle ? 'visible' : 'hidden';
+  speedEl.textContent = Math.round(player.body.speed * 3.6);
+  const canEnter = player.findEnterableCar(allCars());
+  promptEl.textContent = player.inVehicle ? '' : canEnter ? (traffic.drivers.has(canEnter) ? 'F — hijack car' : 'F — get in') : '';
 
   renderer.render(scene, camera);
   input.endFrame();

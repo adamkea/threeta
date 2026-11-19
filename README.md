@@ -9,7 +9,11 @@ npm install
 npm run dev
 ```
 
-Controls: **W/↑** accelerate, **S/↓** brake/reverse, **A D / ← →** steer, **Space** handbrake (drift), **R** reset.
+Controls:
+- **In a car:** **W/↑** accelerate, **S/↓** brake/reverse, **A D / ← →** steer, **Space** handbrake (drift)
+- **On foot:** **WASD / arrows** move (screen-relative), **Shift** run
+- **F / Enter** get in or out of a car — works on traffic too (the driver gets thrown out and runs off)
+- **R** reset
 
 ## Layout
 
@@ -22,5 +26,9 @@ Controls: **W/↑** accelerate, **S/↓** brake/reverse, **A D / ← →** steer
 - `src/traffic/TrafficDriver.js` – AI driver: random routes, pure-pursuit steering, obeys lights, queues, overtakes stopped cars, rejoins lanes after crashes
 - `src/traffic/TrafficSystem.js` – pooled AI cars spawned out of view around the player and recycled when far away
 - `src/physics/carCollisions.js` – car-vs-car impulses with spin
+- `src/characters/Pedestrian.js` – person on foot: movement, collisions, walk/run animation, knockdown
+- `src/characters/NpcManager.js` – non-player people (currently: drivers fleeing a carjacking)
+- `src/player/PlayerController.js` – player state: driving vs on foot, entering/exiting/hijacking cars
+- `src/physics/pedCollisions.js` – people vs cars (shoved, or knocked down by fast impacts)
 - `src/core/CameraRig.js` – high, angled, north-up follow camera with look-ahead and speed zoom
 - `src/core/Input.js` – keyboard input

@@ -8,6 +8,7 @@ const TURN_SPEED = 6.5;
 const FOLLOW_GAP = 3; // metres bumper-to-bumper when queued
 const CAR_LEN = 4.4;
 
+
 /**
  * AI that drives a Car along lanes: picks a random route at each intersection,
  * follows it with pure-pursuit steering, stops at red lights and behind other cars.
@@ -29,6 +30,8 @@ export class TrafficDriver {
     this.blockedTime = 0;
     this.overtaking = null; // { car, time } while pulling around a stopped car
     this.shift = 0; // current lateral offset from the lane (m, positive = left)
+    this.reverseTime = 0; // backing up to make room to pull out
+    this.waitTime = 0; // how long we've been stuck behind something other than a red light
     while (this.points.length < 8) this.#extend();
   }
 
@@ -47,13 +50,28 @@ export class TrafficDriver {
     const d2 = straight && this.rng.chance(0.5) ? straight : this.rng.pick(options);
     const r2 = rightOf(d2);
     const turning = d2 !== straight;
+    const leftTurn = d2[0] === -r[0] && d2[1] === -r[1];
 
     const p0 = { x: bx - d[0] * STOP_DIST + r[0] * LANE_OFFSET, z: bz - d[1] * STOP_DIST + r[1] * LANE_OFFSET };
     const p1 = { x: bx + d2[0] * EXIT_DIST + r2[0] * LANE_OFFSET, z: bz + d2[1] * EXIT_DIST + r2[1] * LANE_OFFSET };
     this.points.push(p0);
-    this.stops.push({ ...p0, dir: d, node: B, axis: axisOf(d), turning });
+    this.stops.push({ ...p0, dir: d, node: B, axis: axisOf(d), turning, leftTurn });
 
-    if (turning) {
+    if (leftTurn) {
+      // Cubic that cuts inside the junction centre, so opposing left turns pass side by side.
+      const h = 4;
+      const c1 = { x: p0.x + d[0] * h, z: p0.z + d[1] * h };
+      const c2 = { x: p1.x - d2[0] * h, z: p1.z - d2[1] * h };
+      for (let t = 1 / 6; t < 1.01; t += 1 / 6) {
+        const u = 1 - t;
+        const a = u * u * u, b = 3 * u * u * t, c = 3 * u * t * t, e = t * t * t;
+        this.points.push({
+          x: a * p0.x + b * c1.x + c * c2.x + e * p1.x,
+          z: a * p0.z + b * c1.z + c * c2.z + e * p1.z,
+          curve: true,
+        });
+      }
+    } else if (turning) {
       // Quadratic Bézier through the corner where the entry and exit lane lines meet.
       const c = { x: bx + (r[0] + r2[0]) * LANE_OFFSET, z: bz + (r[1] + r2[1]) * LANE_OFFSET };
       for (let t = 0.2; t < 1.01; t += 0.2) {
@@ -71,8 +89,11 @@ export class TrafficDriver {
     this.dir = d2;
   }
 
-  /** Returns controls for this physics step. `cars` = every car in the world (incl. player). */
-  update(dt, cars, lights) {
+  /**
+   * Returns controls for this physics step. `cars` = every car in the world (incl. player's),
+   * `peds` = people who might be in the road.
+   */
+  update(dt, cars, lights, peds = []) {
     const car = this.car;
     if (this.lost) {
       this.lostTime += dt;
@@ -103,13 +124,22 @@ export class TrafficDriver {
       proj = { x: a.x + sx * tc, z: a.z + sz * tc, lx: sz / len, lz: -sx / len };
       break;
     }
-    // Deviation from where we mean to be (the lane, shifted left while overtaking).
-    const dev = Math.hypot(pos.x - (proj.x + proj.lx * this.shift), pos.y - (proj.z + proj.lz * this.shift));
+    // How far outside the road corridor we are: our lane through to the oncoming lane is fine.
+    const lat = (pos.x - proj.x) * proj.lx + (pos.y - proj.z) * proj.lz; // + = left
+    const corridor = LANE_OFFSET * 2 + 1;
+    const dev = lat < -1 ? -1 - lat : lat > corridor ? lat - corridor : 0;
     if (dev > 6) {
       this.lost = true;
       this.lostTime = 0;
       this.overtaking = null;
       return { throttle: 0, steer: 0, handbrake: true };
+    }
+
+    // Backing up (nose swinging out) to get room to pass a stopped obstacle.
+    if (this.reverseTime > 0) {
+      this.reverseTime -= dt;
+      if (this.#clearBehind(cars)) return { throttle: vF > -1.5 ? -0.35 : 0, steer: -1, handbrake: false };
+      this.reverseTime = 0;
     }
 
     // --- Pure pursuit: aim at a point `look` metres further along the route ---
@@ -136,7 +166,8 @@ export class TrafficDriver {
       if (stop.turning) desired = Math.min(desired, Math.sqrt(TURN_SPEED ** 2 + 2 * DECEL * Math.max(0, dist)));
       const light = lights.state(stop.node[0], stop.node[1], stop.axis);
       const canStop = dist > (vF * vF) / (2 * DECEL * 1.5);
-      if (light === 'red' || (light === 'yellow' && canStop)) {
+      const mustYield = stop.leftTurn && dist > -0.5 && this.#oncomingTraffic(cars, stop);
+      if (light === 'red' || (light === 'yellow' && canStop) || mustYield) {
         if (dist > -0.5) {
           desired = Math.min(desired, Math.sqrt(2 * DECEL * Math.max(0, dist - 0.3)));
           waitingForLight = desired < 0.5;
@@ -145,16 +176,26 @@ export class TrafficDriver {
     }
 
     if (this.ignoreCrossingTime > 0) this.ignoreCrossingTime -= dt;
-    const follow = this.#followLimit(cars, fwd, right, this.ignoreCrossingTime > 0);
+    const follow = this.#followLimit(cars, peds, fwd, right, this.ignoreCrossingTime > 0);
     desired = Math.min(desired, follow.limit);
-    this.#updateOvertake(dt, follow.blocker, stop, waitingForLight);
+    this.#updateOvertake(dt, follow.blocker, stop, waitingForLight, cars);
     if (this.overtaking) {
       // Crawl while pulling out until our side is clear of the car we're passing.
+      // Crawl while pulling out, and never drive into what we're passing.
       const o = this.overtaking.car;
       const rx = o.position.x - pos.x, rz = o.position.y - pos.y;
-      const sideClear = Math.abs(rx * right.x + rz * right.y) > 2.3;
-      desired = Math.min(desired, sideClear ? 8 : 2);
+      const isCar = !!o.cfg;
+      const sideClear = Math.abs(rx * right.x + rz * right.y) > (isCar ? 2.3 : 1.7);
+      if (!sideClear) {
+        const along = rx * fwd.x + rz * fwd.y;
+        const room = along - CAR_LEN / 2 - (isCar ? CAR_LEN / 2 : 0.4) - 0.6;
+        desired = Math.min(desired, along > 0 ? Math.max(0, Math.min(2, 0.9 * room)) : 2);
+        // Boxed in: back up a bit (swinging the nose out) if nothing's behind us.
+        if (along > 0 && room < 0.4 && Math.abs(vF) < 0.3 && this.#clearBehind(cars)) this.reverseTime = 1.4;
+      } else desired = Math.min(desired, 8);
     }
+
+    this.waitTime = vF < 0.3 && desired < 0.3 && !waitingForLight ? this.waitTime + dt : 0;
 
     // Gridlock breaker: cars waiting on each other across an intersection — creep forward.
     if (vF < 0.3 && desired < 0.3 && !waitingForLight && !follow.queued) {
@@ -187,19 +228,23 @@ export class TrafficDriver {
           const r = rightOf(d);
           // Lane segment from leaving node (i, j) to the stop line of the next node.
           const ax = nodeX(i) + r[0] * LANE_OFFSET, az = nodeX(j) + r[1] * LANE_OFFSET;
+          const maxS = CITY.cell - STOP_DIST - 1;
           const s = (pos.x - ax) * d[0] + (pos.y - az) * d[1];
-          const sc = Math.min(Math.max(s, EXIT_DIST), CITY.cell - STOP_DIST - 2);
+          const sc = Math.min(Math.max(s, 0), maxS);
           const px = ax + d[0] * sc, pz = az + d[1] * sc;
           const dist = Math.hypot(pos.x - px, pos.y - pz);
-          if (!best || dist < best.dist) best = { dist, i, j, d, px, pz, sc };
+          // Aim a few metres further along the lane — it must be in front of us.
+          const ts = Math.min(sc + 5, maxS);
+          const tx = ax + d[0] * ts, tz = az + d[1] * ts;
+          if ((tx - pos.x) * fwd.x + (tz - pos.y) * fwd.y < 1) continue;
+          if (!best || dist < best.dist) best = { dist, i, j, d, tx, tz };
         }
       }
     }
     if (!best || best.dist > 10) return; // stranded (e.g. in a park): stay put until recycled
-    const ahead = Math.min(6, CITY.cell - STOP_DIST - best.sc);
     this.from = [best.i, best.j];
     this.dir = best.d;
-    this.points = [{ x: pos.x, z: pos.y }, { x: best.px + best.d[0] * ahead, z: best.pz + best.d[1] * ahead }];
+    this.points = [{ x: pos.x, z: pos.y }, { x: best.tx, z: best.tz }];
     this.stops = [];
     this.shift = 0;
     while (this.points.length < 8) this.#extend();
@@ -207,24 +252,98 @@ export class TrafficDriver {
   }
 
   /** Pull into the oncoming lane to pass a car that's stopped in our lane (e.g. the player). */
-  #updateOvertake(dt, blocker, stop, waitingForLight) {
+  #updateOvertake(dt, blocker, stop, waitingForLight, cars) {
     if (this.overtaking) {
       const o = this.overtaking;
       o.time += dt;
       const rel = o.car.position.clone().sub(this.car.position).dot(this.car.forward);
-      if (rel < -6 || o.time > 10 || !o.car.active) this.overtaking = null;
+      if (rel < -6 || o.time > 12 || !o.car.active) {
+        this.overtaking = null;
+        this.shift = Math.max(0, this.#lateralOffset()); // ease back from where we actually are
+      }
       return;
     }
     const stoppedBlocker = blocker && blocker.speed < 0.5;
-    const nearJunction = stop && this.#along(stop) < 14;
+    // Need room to get past before the junction: measure from the obstacle, not from us.
+    const nearJunction =
+      stop && blocker && (stop.x - blocker.position.x) * stop.dir[0] + (stop.z - blocker.position.y) * stop.dir[1] < 14;
     const curving = this.points[1].curve;
-    if (stoppedBlocker && !waitingForLight && !nearJunction && !curving) {
+    if (stoppedBlocker && !waitingForLight && !curving && !nearJunction && this.#oncomingLaneClear(cars, blocker)) {
       this.blockedTime += dt;
       if (this.blockedTime > 2.5) {
         this.overtaking = { car: blocker, time: 0 };
         this.blockedTime = 0;
       }
     } else this.blockedTime = 0;
+  }
+
+  /** Left turns yield to oncoming cars heading through the same junction (unless also turning left). */
+  #oncomingTraffic(cars, stop) {
+    const me = this.car;
+    const [dx, dz] = stop.dir;
+    const [rx, rz] = rightOf(stop.dir);
+    for (const o of cars) {
+      if (o === me || !o.active) continue;
+      if (o.forward.x * dx + o.forward.y * dz > -0.7) continue; // not coming toward us
+      // Position relative to our stop line: ahead (through the junction) and in the opposite lanes.
+      const ox = o.position.x - stop.x, oz = o.position.y - stop.z;
+      const along = ox * dx + oz * dz;
+      const side = ox * rx + oz * rz; // negative = to our left
+      if (along < 0 || along > 40 || side > -3 || side < -12) continue;
+      const theirStop = o.ai?.stops[0];
+      if (theirStop?.leftTurn && theirStop.node[0] === stop.node[0] && theirStop.node[1] === stop.node[1]) continue;
+      // A car waiting far back (e.g. queued) isn't a threat; anything moving or close is.
+      if (o.speed < 0.5 && along > 22) continue;
+      // Already past the junction centre heading away? Then it's clear.
+      const toNode = (nodeX(stop.node[0]) - o.position.x) * o.forward.x + (nodeX(stop.node[1]) - o.position.y) * o.forward.y;
+      if (toNode < -3) continue;
+      return true;
+    }
+    return false;
+  }
+
+  /** True if there's room to reverse: no car close behind us. */
+  #clearBehind(cars) {
+    const me = this.car;
+    const fwd = me.forward;
+    const right = me.right;
+    for (const o of cars) {
+      if (o === me || !o.active) continue;
+      const rx = o.position.x - me.position.x, rz = o.position.y - me.position.y;
+      const along = rx * fwd.x + rz * fwd.y;
+      if (along < 0 && along > -CAR_LEN - 3 && Math.abs(rx * right.x + rz * right.y) < 2.6) return false;
+    }
+    return true;
+  }
+
+  /** Nothing in the oncoming lane between us and a bit past the obstacle (or heading our way soon). */
+  #oncomingLaneClear(cars, blocker) {
+    const me = this.car;
+    const fwd = me.forward, right = me.right;
+    const bAlong = (blocker.position.x - me.position.x) * fwd.x + (blocker.position.y - me.position.y) * fwd.y;
+    for (const o of cars) {
+      if (o === me || o === blocker || !o.active) continue;
+      const rx = o.position.x - me.position.x, rz = o.position.y - me.position.y;
+      const along = rx * fwd.x + rz * fwd.y;
+      const left = -(rx * right.x + rz * right.y);
+      if (left < 3.5 - 2.5 || left > 3.5 * 2 + 2.5) continue; // not in the oncoming lane
+      const closing = Math.max(0, -o.velocity.dot(fwd)); // its speed toward us
+      if (along > -3 && along < bAlong + 10 + closing * 4) return false;
+    }
+    return true;
+  }
+
+  /** True while physically over in the oncoming lane (overtaking or returning from it). */
+  get inOncomingLane() {
+    return !this.lost && this.#lateralOffset() > 1.5;
+  }
+
+  /** Current offset to the left of the route's current segment (m). */
+  #lateralOffset() {
+    const a = this.points[0], b = this.points[1];
+    const len = Math.hypot(b.x - a.x, b.z - a.z) || 1;
+    const lx = (b.z - a.z) / len, lz = -(b.x - a.x) / len;
+    return (this.car.position.x - a.x) * lx + (this.car.position.y - a.z) * lz;
   }
 
   /** Signed distance along a stop's travel direction from the car to the stop line. */
@@ -254,7 +373,7 @@ export class TrafficDriver {
    * Max speed that keeps a safe gap to the nearest car in our path. `blocker` is that car;
    * `queued` means it's travelling our way (a queue, not a gridlock).
    */
-  #followLimit(cars, fwd, right, ignoreCrossing) {
+  #followLimit(cars, peds, fwd, right, ignoreCrossing) {
     let limit = Infinity;
     let blocker = null;
     let queued = false;
@@ -268,8 +387,15 @@ export class TrafficDriver {
       const lateral = Math.abs(rx * right.x + rz * right.y);
       if (along <= 0 || lateral > 2.4) continue;
       const align = other.forward.dot(fwd);
-      // Oncoming cars normally just pass by — unless we're in their lane overtaking.
-      if (align < -0.7 && !this.overtaking) continue;
+      // Mutual block (each sees the other ahead, e.g. side by side mid-junction): lower id goes.
+      const of = other.forward;
+      const theirAlong = -(rx * of.x + rz * of.y);
+      const theirLateral = Math.abs(rx * of.y - rz * of.x);
+      if (theirAlong > 0 && theirLateral < 2.4 && me.id < other.id) continue;
+      // Oncoming cars in their own lane just pass by. One in *our* lane (overtaking toward us)
+      // does matter — except mid-turn, where the cone sweeps across the other lanes.
+      const headOn = this.inOncomingLane || !!other.ai?.inOncomingLane;
+      if (align < -0.7 && !this.overtaking && (this.points[1].curve || !headOn)) continue;
       if (ignoreCrossing && Math.abs(align) < 0.7) continue;
       const leadSpeed = Math.max(0, other.velocity.dot(fwd));
       const gap = along - CAR_LEN;
@@ -278,6 +404,22 @@ export class TrafficDriver {
         limit = l;
         blocker = other;
         queued = align > 0.7;
+      }
+    }
+    // People in the road: stop short of them (and pass them if they just stand there).
+    for (const p of peds) {
+      if (!p.active || p === this.overtaking?.car) continue;
+      const rx = p.position.x - me.position.x;
+      const rz = p.position.y - me.position.y;
+      if (rx * rx + rz * rz > 400) continue;
+      const along = rx * fwd.x + rz * fwd.y;
+      const lateral = Math.abs(rx * right.x + rz * right.y);
+      if (along <= 0 || lateral > 1.9) continue;
+      const l = Math.max(0, 0.9 * (along - CAR_LEN / 2 - 4.5));
+      if (l < limit) {
+        limit = l;
+        blocker = p;
+        queued = false;
       }
     }
     return { limit, blocker, queued };

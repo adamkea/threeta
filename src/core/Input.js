@@ -6,6 +6,8 @@ const BINDINGS = {
   right: ['KeyD', 'ArrowRight'],
   handbrake: ['Space'],
   reset: ['KeyR'],
+  use: ['KeyF', 'Enter'], // enter / exit vehicles
+  sprint: ['ShiftLeft', 'ShiftRight'],
 };
 
 export class Input {
@@ -37,6 +39,17 @@ export class Input {
   /** -1..1 steering (left positive) */
   get steer() {
     return (this.isDown('left') ? 1 : 0) - (this.isDown('right') ? 1 : 0);
+  }
+
+  /**
+   * On-foot movement as a world-space direction (x, z), screen-relative for the north-up
+   * camera: up = -Z, right = +X. Length is 0 or 1.
+   */
+  get move() {
+    const x = (this.isDown('right') ? 1 : 0) - (this.isDown('left') ? 1 : 0);
+    const z = (this.isDown('down') ? 1 : 0) - (this.isDown('up') ? 1 : 0);
+    const len = Math.hypot(x, z) || 1;
+    return { x: x / len, y: z / len };
   }
 
   endFrame() {

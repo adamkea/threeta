@@ -18,3 +18,9 @@ html, body {
   font-size: 13px; line-height: 1.6;
   background: rgba(0,0,0,.45); padding: 8px 12px; border-radius: 6px;
 }
+#prompt {
+  position: absolute; left: 50%; bottom: 28px; transform: translateX(-50%);
+  font-size: 18px; font-weight: 700;
+  text-shadow: 0 2px 0 #000, 0 0 10px rgba(0,0,0,.7);
+}
+#prompt:empty { display: none; }

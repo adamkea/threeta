@@ -1,6 +1,8 @@
 import * as THREE from 'three';
 
 // Tunable handling parameters (SI-ish units: metres, seconds).
+let nextId = 1;
+
 const DEFAULTS = {
   engineAccel: 20, // m/s² at full throttle
   brakeDecel: 38,
@@ -32,6 +34,7 @@ export class Car {
     this.heading = 0;
     this.steer = 0; // smoothed -1..1
     this.braking = false;
+    this.id = nextId++;
     this.active = true; // inactive cars are pooled and skipped by physics/AI
     this.yawRate = 0; // extra spin from impacts (rad/s)
     this.wheelSpin = 0;
@@ -114,7 +117,7 @@ export class Car {
         vF -= c.brakeDecel * -controls.throttle * dt;
         this.braking = true;
       } else {
-        vF -= c.reverseAccel * dt;
+        vF -= c.reverseAccel * -controls.throttle * dt;
       }
     }
 

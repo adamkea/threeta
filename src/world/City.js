@@ -18,6 +18,16 @@ export function roadCenter(i) {
   return -CITY.half + CITY.roadWidth / 2 + i * CITY.cell;
 }
 
+/** Ground height at a point: raised on sidewalks/blocks, 0 on roads. */
+export function groundHeight(x, z) {
+  const inBlock = (v) => {
+    const o = v + CITY.half - CITY.roadWidth;
+    if (o < 0 || o > CITY.size - 2 * CITY.roadWidth) return false;
+    return o % CITY.cell < CITY.blockSize;
+  };
+  return inBlock(x) && inBlock(z) ? CITY.curbHeight : 0;
+}
+
 /** World-space min corner of block `i` on either axis. */
 function blockMin(i) {
   return -CITY.half + CITY.roadWidth + i * CITY.cell;
