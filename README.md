@@ -46,7 +46,7 @@ Once a car is **burning**, AI drivers bail out and run, and the fire burns it do
 The final state is **destroyed**: the car explodes, hurting and shoving people and cars nearby
 (which can set off other cars in a chain), and leaves a burnt-out shell sitting on its rims that
 can't be driven or entered. If you're still inside when it goes up, you won't survive. Blowing up a
-police car raises your wanted level. A bar above the speedometer shows your car's condition.
+police car raises your wanted level. There's no HUD readout: how the car looks tells you its state.
 
 This works for every model, current and future, because it lives in `Car` itself:
 - **New model, no extra work:** any entry in `MODELS` (`src/vehicles/carModels.js`) gets the default

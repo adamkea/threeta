@@ -167,8 +167,6 @@ const starEls = [...wantedEl.querySelectorAll('i')];
 const bannerEl = document.getElementById('banner');
 const cityMap = new CityMap(city, document.getElementById('map'));
 const healthEl = document.getElementById('health');
-const carHealthEl = document.getElementById('car-health');
-const carStateEl = carHealthEl.querySelector('.state');
 const hurtEl = document.getElementById('hurt');
 const versionEl = document.getElementById('version');
 versionEl.textContent = `v${__GAME_VERSION__}`;
@@ -355,14 +353,6 @@ function frame(now) {
   sun.position.copy(rig.focus).add(sunOffset);
 
   speedBox.style.visibility = player.inVehicle ? 'visible' : 'hidden';
-  carHealthEl.style.visibility = player.inVehicle ? 'visible' : 'hidden';
-  if (player.inVehicle) {
-    const d = player.vehicle.damage;
-    carHealthEl.style.setProperty('--hp', d.fraction);
-    carStateEl.textContent = d.index ? d.state.name : '';
-    carHealthEl.classList.toggle('bad', d.fraction < 0.55);
-    carHealthEl.classList.toggle('critical', d.state.fire != null || d.fraction < 0.3);
-  }
   speedEl.textContent = Math.round(player.body.speed * 3.6);
   const canEnter = player.findEnterableCar(allCars());
   const occupied = traffic.drivers.has(canEnter) || police.owns(canEnter);
