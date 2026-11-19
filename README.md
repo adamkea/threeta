@@ -32,7 +32,8 @@ edges and boosts saturation. Roads have double-yellow centre lines, stop lines a
 - `src/traffic/TrafficDriver.js` – AI driver: random routes, pure-pursuit steering, obeys lights, queues, overtakes stopped cars, rejoins lanes after crashes
 - `src/traffic/TrafficSystem.js` – pooled AI cars spawned out of view around the player and recycled when far away
 - `src/physics/carCollisions.js` – car-vs-car impulses with spin
-- `src/characters/Pedestrian.js` – person on foot: movement, collisions, walk/run animation, knockdown
+- `src/characters/Pedestrian.js` – person on foot: movement, collisions, walk/run animation, knockdown; clothing & accessories (hats, jackets, badges, belts, masks…) toggled per look
+- `src/characters/outfits.js` – character looks: civilians, cops (white-topped cap, navy uniform, badge, gold epaulettes) and three gangs (Red Fangs: red do-rags & bandanas; Violet Saints: purple tracksuits & backwards caps; Lime Vipers: lime hoodies, hoods up), plus gang turf (neutral downtown, outskirts split three ways) and who spawns where
 - `src/characters/NpcManager.js` – pooled pedestrians around the player: stroll the sidewalks, cross at zebra crossings on a green, dodge oncoming cars, scatter when someone gets run over; carjacked drivers flee then calm down
 - `src/characters/Sidewalks.js` – pedestrian walk graph (block-corner waypoints, crossings tied to junction lights)
 - `src/player/PlayerController.js` – player state: driving vs on foot, entering/exiting/hijacking cars
