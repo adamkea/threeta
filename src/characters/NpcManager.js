@@ -336,7 +336,7 @@ function roadClear(cars, mid) {
 
 export function disposeObject(obj) {
   obj.traverse((o) => {
-    o.geometry?.dispose();
+    if (o.geometry && !o.geometry.userData.shared) o.geometry.dispose();
     if (o.material) [].concat(o.material).forEach((m) => m.dispose());
   });
 }

@@ -1,5 +1,25 @@
 import * as THREE from 'three';
+import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeometry.js';
 import { toon } from '../render/toon.js';
+
+let sharedGeo = null;
+/** Rounded body parts, shared by every person. */
+function pedGeometry() {
+  if (sharedGeo) return sharedGeo;
+  sharedGeo = {
+    leg: new THREE.CapsuleGeometry(0.11, 0.8 - 0.22, 4, 10),
+    arm: new THREE.CapsuleGeometry(0.08, 0.52 - 0.16, 4, 10),
+    hand: new THREE.SphereGeometry(0.09, 10, 8),
+    shoe: new THREE.SphereGeometry(0.12, 10, 8).scale(1, 0.6, 1.5),
+    chest: new RoundedBoxGeometry(0.62, 0.62, 0.36, 4, 0.15),
+    hips: new RoundedBoxGeometry(0.5, 0.2, 0.32, 3, 0.09),
+    head: new THREE.SphereGeometry(0.25, 16, 12),
+    hair: new THREE.SphereGeometry(0.265, 16, 10, 0, Math.PI * 2, 0, Math.PI * 0.55),
+    nose: new THREE.SphereGeometry(0.05, 8, 6),
+  };
+  for (const g of Object.values(sharedGeo)) g.userData.shared = true;
+  return sharedGeo;
+}
 
 const WALK_SPEED = 4.2;
 const RUN_SPEED = 8;
@@ -144,23 +164,34 @@ export class Pedestrian {
     this.body = body;
     const mat = (c) => toon({ color: c });
     this.mats = { shirt: mat(shirt), pants: mat(pants), skin: mat(skin), hair: mat(hair) };
-    const box = (w, h, d, m) => {
-      const mesh = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), m);
+    const G = pedGeometry();
+    const part = (geo, m) => {
+      const mesh = new THREE.Mesh(geo, m);
       mesh.castShadow = true;
       return mesh;
     };
 
     // Limbs hang from pivots at hip/shoulder height so rotation.x swings them.
-    const limb = (x, y, w, h, m) => {
+    const limb = (x, y, geo, len, m, hand) => {
       const pivot = new THREE.Group();
       pivot.position.set(x, y, 0);
-      const part = box(w, h, w, m);
-      part.position.y = -h / 2;
-      pivot.add(part);
+      const p = part(geo, m);
+      p.position.y = -len / 2;
+      pivot.add(p);
+      if (hand) {
+        const h = part(G.hand, this.mats.skin);
+        h.position.y = -len - 0.02;
+        pivot.add(h);
+      } else {
+        const shoe = part(G.shoe, this.mats.shoe);
+        shoe.position.set(0, -len + 0.04, 0.05);
+        pivot.add(shoe);
+      }
       return pivot;
     };
-    this.legL = limb(0.15, 0.85, 0.22, 0.85, this.mats.pants);
-    this.legR = limb(-0.15, 0.85, 0.22, 0.85, this.mats.pants);
+    this.mats.shoe = toon({ color: 0x1b1a1c });
+    this.legL = limb(0.14, 0.85, G.leg, 0.8, this.mats.pants);
+    this.legR = limb(-0.14, 0.85, G.leg, 0.8, this.mats.pants);
     body.add(this.legL, this.legR);
 
     const torso = new THREE.Group();
@@ -168,15 +199,20 @@ export class Pedestrian {
     this.torso = torso;
     body.add(torso);
     const shirtMat = this.mats.shirt;
-    const chest = box(0.62, 0.65, 0.36, shirtMat);
+    const chest = part(G.chest, shirtMat);
     chest.position.y = 0.05;
-    const head = box(0.42, 0.42, 0.42, this.mats.skin); // big comic head
-    head.position.y = 0.6;
-    const hairMesh = box(0.46, 0.14, 0.46, this.mats.hair);
-    hairMesh.position.y = 0.84;
-    torso.add(chest, head, hairMesh);
-    this.armL = limb(0.36, 0.33, 0.15, 0.6, shirtMat);
-    this.armR = limb(-0.36, 0.33, 0.15, 0.6, shirtMat);
+    const hips = part(G.hips, this.mats.pants);
+    hips.position.y = -0.24;
+    const head = part(G.head, this.mats.skin); // big round comic head
+    head.position.y = 0.62;
+    const hairMesh = part(G.hair, this.mats.hair);
+    hairMesh.position.set(0, 0.64, -0.02);
+    hairMesh.rotation.x = -0.35; // hairline sits back from the face
+    const nose = part(G.nose, this.mats.skin); // shows which way they face
+    nose.position.set(0, 0.6, 0.24);
+    torso.add(chest, hips, head, hairMesh, nose);
+    this.armL = limb(0.38, 0.3, G.arm, 0.52, shirtMat, true);
+    this.armR = limb(-0.38, 0.3, G.arm, 0.52, shirtMat, true);
     torso.add(this.armL, this.armR);
     return root;
   }
