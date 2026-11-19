@@ -14,6 +14,14 @@ CITY.cell = CITY.blockSize + CITY.roadWidth;
 CITY.size = CITY.blocks * CITY.blockSize + (CITY.blocks + 1) * CITY.roadWidth;
 CITY.half = CITY.size / 2;
 
+/** Height of the sea around the island; anything that goes over the edge falls to this. */
+export const WATER_Y = -0.6;
+
+/** True once a point is past the quayside, over open water. */
+export function offIsland(x, z) {
+  return Math.abs(x) > CITY.half || Math.abs(z) > CITY.half;
+}
+
 /** World-space centre of road line `i` (0..blocks), on either axis. */
 export function roadCenter(i) {
   return -CITY.half + CITY.roadWidth / 2 + i * CITY.cell;
@@ -159,7 +167,6 @@ export function createCity(seed = 1337) {
   group.add(parking.group);
   group.add(createStreetLamps(colliders));
 
-  addPerimeter(colliders);
 
   return { group, colliders, buildings, parks, lots, parkingSpots: parking.spots };
 }
@@ -334,35 +341,14 @@ function createGround() {
     toon({ color: 0x2f8fb8 }),
   );
   water.rotation.x = -Math.PI / 2;
-  water.position.y = -0.6;
+  water.position.y = WATER_Y;
   g.add(water);
 
-  // Sea wall around the edge.
-  const wallMat = toon({ color: 0x9a9384 });
-  const t = 2;
-  for (const [w, d, x, z] of [
-    [CITY.size + t * 2, t, 0, -CITY.half - t / 2],
-    [CITY.size + t * 2, t, 0, CITY.half + t / 2],
-    [t, CITY.size, -CITY.half - t / 2, 0],
-    [t, CITY.size, CITY.half + t / 2, 0],
-  ]) {
-    const m = new THREE.Mesh(new THREE.BoxGeometry(w, 1.6, d), wallMat);
-    m.position.set(x, 0.2, z);
-    m.castShadow = m.receiveShadow = true;
-    g.add(m);
-  }
+  // Open quayside: the island is a slab standing in the sea, with no wall to stop you going over.
+  const quay = new THREE.Mesh(new THREE.BoxGeometry(CITY.size, 4, CITY.size), toon({ color: 0x9a9384 }));
+  quay.position.y = -2.01; // top sits just under the asphalt
+  g.add(quay);
   return g;
-}
-
-function addPerimeter(colliders) {
-  const h = CITY.half;
-  const t = 5;
-  colliders.push(
-    { minX: -h - t, maxX: h + t, minZ: -h - t, maxZ: -h },
-    { minX: -h - t, maxX: h + t, minZ: h, maxZ: h + t },
-    { minX: -h - t, maxX: -h, minZ: -h, maxZ: h },
-    { minX: h, maxX: h + t, minZ: -h, maxZ: h },
-  );
 }
 
 function createRoadMarkings() {

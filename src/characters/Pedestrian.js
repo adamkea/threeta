@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { offIsland, WATER_Y } from '../world/City.js';
 import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeometry.js';
 import { toon } from '../render/toon.js';
 import { Health } from '../combat/Health.js';
@@ -138,6 +139,10 @@ export class Pedestrian {
     this.gait = 0; // gait cycle phase (radians); left foot strikes at 0, right at PI
     this.runBlend = 0; // 0 walking .. 1 running (smoothed)
     this.groundY = 0;
+    // Walked (or was thrown) off the edge of the island: drops (`drop` metres, falling at `vy`).
+    this.overboard = false;
+    this.drop = 0;
+    this.vy = 0;
     this.justKnocked = false; // set on knockdown; observers (e.g. NpcManager) clear it
     this.health = new Health(100);
     this.hurtFrom = null; // Vector2 position of whoever last hurt us (non-fatally); observers clear it
@@ -235,6 +240,8 @@ export class Pedestrian {
     this.heading = heading;
     this.downTime = 0;
     this.fall = this.dead ? 1 : 0;
+    this.overboard = false;
+    this.drop = this.vy = 0;
   }
 
   /** Back on your feet at full health. */
@@ -252,6 +259,8 @@ export class Pedestrian {
    */
   update(dt, move, run, world, face = null) {
     this.recoil = Math.max(0, this.recoil - dt * 8);
+    if (!this.overboard && offIsland(this.position.x, this.position.y)) this.overboard = true;
+    if (this.overboard) return this.#fallIntoSea(dt);
     if (this.isDown) {
       this.downTime = Math.max(0, this.downTime - dt);
       this.velocity.multiplyScalar(Math.exp(-3 * dt));
@@ -280,6 +289,20 @@ export class Pedestrian {
     this.runBlend += (runT - this.runBlend) * Math.min(1, 8 * dt);
     const cycleLen = 2.8 + (4.9 - 2.8) * this.runBlend; // metres travelled per full gait cycle
     this.gait = (this.gait + (sp / cycleLen) * Math.PI * 2 * dt) % (Math.PI * 2);
+  }
+
+  /** Over the edge: drop into the water, and drown on landing. */
+  #fallIntoSea(dt) {
+    const inWater = this.groundY - this.drop < WATER_Y;
+    if (inWater) {
+      if (!this.dead) this.health.damage(this.health.hp, 'drowned');
+      this.velocity.multiplyScalar(Math.exp(-3 * dt));
+      this.vy += (-0.8 - this.vy) * Math.min(1, 4 * dt);
+    } else {
+      this.vy -= 25 * dt;
+    }
+    this.drop = Math.min(4, this.drop - this.vy * dt);
+    this.position.addScaledVector(this.velocity, dt);
   }
 
   /** Thrown by an impact (e.g. hit by a car). */
@@ -339,7 +362,7 @@ export class Pedestrian {
 
   syncMesh(dt) {
     this.fall += ((this.isDown ? 1 : 0) - this.fall) * Math.min(1, (this.isDown ? 10 : 3) * dt);
-    this.mesh.position.set(this.position.x, this.groundY, this.position.y);
+    this.mesh.position.set(this.position.x, this.groundY - this.drop, this.position.y);
     this.mesh.rotation.y = this.heading;
     this.body.rotation.x = -this.fall * (Math.PI / 2);
     this.body.position.y = this.fall * 0.25;

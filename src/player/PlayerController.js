@@ -75,7 +75,7 @@ export class PlayerController {
     let best = null;
     let bestD = ENTER_RANGE;
     for (const c of cars) {
-      if (!c.active || c.speed > MAX_ENTER_SPEED) continue;
+      if (!c.active || c.overboard || c.speed > MAX_ENTER_SPEED) continue;
       const d = c.position.distanceTo(this.ped.position);
       if (d < bestD) (bestD = d), (best = c);
     }
@@ -114,7 +114,7 @@ export class PlayerController {
 
   #exit(world, force = false) {
     const car = this.vehicle;
-    if (car.speed > MAX_EXIT_SPEED && !force) return false;
+    if ((car.speed > MAX_EXIT_SPEED || car.overboard) && !force) return false;
     // Prefer the driver's (left) side, then passenger side, then front/back.
     const candidates = [this.#sideSpot(car, -1), this.#sideSpot(car, 1), this.#endSpot(car, 1), this.#endSpot(car, -1)];
     const spot = candidates.find((p) => !blocked(world, p, this.ped.radius)) ?? candidates[0];
