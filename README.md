@@ -15,6 +15,7 @@ Controls:
 - **On foot:** **WASD / arrows** move (screen-relative), **Shift** run
 - **F / Enter** get in or out of a car — works on traffic too (the driver gets thrown out and runs off)
 - **R** reset
+- **M** city map (shows you, police and traffic)
 
 ## Wanted level
 

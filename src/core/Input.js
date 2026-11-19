@@ -8,6 +8,7 @@ const BINDINGS = {
   reset: ['KeyR'],
   use: ['KeyF', 'Enter'], // enter / exit vehicles
   sprint: ['ShiftLeft', 'ShiftRight'],
+  map: ['KeyM'],
 };
 
 export class Input {

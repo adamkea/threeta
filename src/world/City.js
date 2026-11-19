@@ -30,7 +30,7 @@ export function groundHeight(x, z) {
 }
 
 /** World-space min corner of block `i` on either axis. */
-function blockMin(i) {
+export function blockMin(i) {
   return -CITY.half + CITY.roadWidth + i * CITY.cell;
 }
 
@@ -56,6 +56,7 @@ export function createCity(seed = 1337) {
   const roofs = new QuadBuilder();
   const sidewalkMatrices = [];
   const parks = [];
+  const buildings = []; // footprints + colours, for the map
 
   for (let bx = 0; bx < CITY.blocks; bx++) {
     for (let bz = 0; bz < CITY.blocks; bz++) {
@@ -74,7 +75,7 @@ export function createCity(seed = 1337) {
         parks.push({ x0, z0 });
         continue;
       }
-      buildBlock(rng, x0, z0, downtown, walls, roofs, colliders);
+      buildBlock(rng, x0, z0, downtown, walls, roofs, colliders, buildings);
     }
   }
 
@@ -104,10 +105,10 @@ export function createCity(seed = 1337) {
 
   addPerimeter(colliders);
 
-  return { group, colliders };
+  return { group, colliders, buildings, parks };
 }
 
-function buildBlock(rng, x0, z0, downtown, walls, roofs, colliders) {
+function buildBlock(rng, x0, z0, downtown, walls, roofs, colliders, buildings) {
   const inset = CITY.sidewalk;
   const lot = CITY.blockSize - inset * 2;
   const cols = rng.int(1, 3);
@@ -154,6 +155,7 @@ function buildBlock(rng, x0, z0, downtown, walls, roofs, colliders) {
       }
 
       colliders.push({ minX, maxX: minX + cw, minZ, maxZ: minZ + rw });
+      buildings.push({ minX, maxX: minX + cw, minZ, maxZ: minZ + rw, height: h, color: color.getHex() });
     }
   }
 }

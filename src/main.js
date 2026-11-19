@@ -16,6 +16,7 @@ import { InkRenderer } from './render/InkRenderer.js';
 import { SkidMarks } from './effects/SkidMarks.js';
 import { Wanted } from './police/Wanted.js';
 import { PoliceSystem } from './police/PoliceSystem.js';
+import { CityMap } from './ui/CityMap.js';
 
 const canvas = document.getElementById('game');
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
@@ -110,6 +111,7 @@ const promptEl = document.getElementById('prompt');
 const wantedEl = document.getElementById('wanted');
 const starEls = [...wantedEl.querySelectorAll('i')];
 const bannerEl = document.getElementById('banner');
+const cityMap = new CityMap(city, document.getElementById('map'));
 
 function resize() {
   const w = window.innerWidth;
@@ -207,6 +209,7 @@ function frame(now) {
     if (input.wasPressed('reset')) resetPlayer();
     if (input.wasPressed('use')) player.use(allCars(), world);
   }
+  if (input.wasPressed('map')) cityMap.toggle();
 
   acc += dt;
   while (acc >= STEP) {
@@ -240,6 +243,13 @@ function frame(now) {
   promptEl.textContent = player.inVehicle || bustedTimer > 0 ? '' : canEnter ? (occupied ? 'F — hijack car' : 'F — get in') : '';
 
   ink.render(scene, camera);
+  cityMap.render(dt, {
+    player: player.body,
+    inVehicle: player.inVehicle,
+    cars: allCars().filter((c) => !isPoliceCar(c)),
+    policeCars: allCars().filter(isPoliceCar),
+    cops: npcs.peds.filter((p) => p.role === 'cop' && !p.isDown),
+  });
   input.endFrame();
   requestAnimationFrame(frame);
 }
