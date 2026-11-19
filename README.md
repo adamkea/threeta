@@ -16,6 +16,24 @@ Controls:
 - **F / Enter** get in or out of a car — works on traffic too (the driver gets thrown out and runs off)
 - **R** reset
 - **M** city map (shows you, police and traffic)
+- **Q** draw / holster your pistol (on foot), **mouse** to aim, **left click** (or **Ctrl**) to shoot, **E** reload
+
+## Health & guns
+
+Everyone on foot has health (`src/combat/Health.js`): the player 100, civilians 60, gang members and
+cops 100. Getting hit by a car hurts in proportion to its speed (fast hits kill). Your health bar sits
+under the wanted stars, and the screen edges flash red when you're hurt. Die and you're **FLATLINED**:
+you respawn back at the start with full health and a clean record. Bodies stay on the street for a while.
+
+You start with a holstered pistol (12-round mag, 60 spare). With a gun out you face the mouse cursor
+and can strafe. Bullets are instant hitscan rays stopped by the first person, car or building in the way.
+Gunshots send nearby people running; shooting where the police can see or hear it, hitting people
+(cops especially) and killing raise your wanted level. At 3+ stars, officers chasing you on foot draw
+their own pistols and shoot back.
+
+Guns are data: add an entry to `WEAPONS` in `src/combat/weapons.js` (damage, fire rate, auto,
+magazine, reload time, range, spread, pellets, knockback, noise) and give it to the player with
+`player.giveWeapon(WEAPONS.x)`; Q cycles through what you carry.
 
 ## Wanted level
 
@@ -53,5 +71,8 @@ edges and boosts saturation. Roads have double-yellow centre lines, stop lines a
 - `src/police/PoliceSystem.js` – spawns/retires patrol cars by wanted level, pulls patrol cars out of traffic, deploys officers, sends beat cops after you, decides arrests
 - `src/police/PursuitDriver.js` – police driving: junction-to-junction navigation over the road grid toward you, then straight at you (leading your movement) when in view; three-point turns and backing out when stuck
 - `src/police/sight.js` – line-of-sight test against buildings
+- `src/combat/Health.js` – hit points (damage / heal / dead) for anything that can be hurt
+- `src/combat/weapons.js` – weapon definitions (`WEAPONS`) and `Weapon` (ammo, fire-rate cooldown, reload)
+- `src/combat/CombatSystem.js` – fires shots for anyone (player or NPC): hitscan vs people, cars (oriented boxes) and buildings, damage + knockback, panic, tracers / muzzle flashes / impact puffs
 - `src/core/CameraRig.js` – high, angled, north-up follow camera with look-ahead and speed zoom
-- `src/core/Input.js` – keyboard input
+- `src/core/Input.js` – keyboard + mouse input

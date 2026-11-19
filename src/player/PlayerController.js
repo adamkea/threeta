@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { WEAPONS, Weapon } from '../combat/weapons.js';
 
 const ENTER_RANGE = 3.6; // max distance from the person to a car's centre to get in
 const MAX_ENTER_SPEED = 5; // can't jump into cars moving faster than this (m/s)
@@ -20,6 +21,13 @@ export class PlayerController {
     this.onCarjack = null; // (car) => void: told whenever the player takes a car that had a driver
     /** Non-AI cars in the world: ones the player owns, has driven, or abandoned. */
     this.freeCars = [car];
+    /** Guns carried; `equipped` indexes into it (-1 = unarmed). Starts with a holstered pistol. */
+    this.weapons = [new Weapon(WEAPONS.pistol)];
+    this.equipped = -1;
+    this.aim = new THREE.Vector2(); // world point the player is aiming at (set from the mouse)
+    this.combat = null; // CombatSystem, once it exists
+    this.triggerHeld = false; // semi-auto guns need the trigger released between shots
+    this.shotBuffer = 0;
     ped.active = false;
     ped.mesh.visible = false;
   }
@@ -31,6 +39,34 @@ export class PlayerController {
   /** What the camera should follow. */
   get body() {
     return this.vehicle ?? this.ped;
+  }
+
+  /** The gun in hand, or null. */
+  get weapon() {
+    return this.weapons[this.equipped] ?? null;
+  }
+
+  /** Can shoot right now: on foot, standing, gun out. */
+  get armed() {
+    return !this.inVehicle && !this.ped.isDown && this.weapon !== null;
+  }
+
+  /** A click that was pressed and released between physics steps still counts as a shot. */
+  pullTrigger() {
+    this.shotBuffer = 0.2;
+  }
+
+  /** Q: unarmed -> first gun -> next gun … -> unarmed. */
+  cycleWeapon() {
+    this.equipped = this.equipped + 1 >= this.weapons.length ? -1 : this.equipped + 1;
+    this.ped.setWeapon(this.weapon?.def ?? null);
+  }
+
+  /** Give the player a gun (or ammo for one they already have). */
+  giveWeapon(def, rounds = def.reserve) {
+    const have = this.weapons.find((w) => w.def === def);
+    if (have) have.addAmmo(rounds);
+    else this.weapons.push(new Weapon(def, { reserve: rounds }));
   }
 
   /** Nearest car the person could get into right now, or null. */
@@ -109,7 +145,23 @@ export class PlayerController {
         c.update(dt, PARKED, world);
       }
     }
-    if (!this.inVehicle) this.ped.update(dt, input.move, input.isDown('sprint'), world);
+    for (const w of this.weapons) w.update(dt);
+    if (this.inVehicle) return;
+
+    const armed = this.armed;
+    const face = armed ? Math.atan2(this.aim.x - this.ped.position.x, this.aim.y - this.ped.position.y) : null;
+    this.ped.update(dt, input.move, input.isDown('sprint'), world, face);
+
+    // Shooting: semi-automatic guns fire once per trigger pull (a pull just before the gun is
+    // ready is remembered briefly, so fast tapping isn't lost); automatics fire while held.
+    const trigger = input.isDown('fire');
+    if (trigger && !this.triggerHeld) this.shotBuffer = 0.2;
+    this.triggerHeld = trigger;
+    this.shotBuffer = Math.max(0, this.shotBuffer - dt);
+    if (armed && (this.shotBuffer > 0 || (trigger && this.weapon.def.auto))) {
+      if (this.combat?.fire(this.ped, this.weapon, this.aim) || this.weapon.mag === 0) this.shotBuffer = 0;
+    }
+    if (armed && input.wasPressed('reload')) this.weapon.reload();
   }
 
   /** Drop parked cars that are far from the action. */

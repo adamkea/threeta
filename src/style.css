@@ -91,3 +91,46 @@ html, body {
 #map .legend .car::before { background: #e9e4da; }
 #map .legend .hint { opacity: .7; font-weight: 400; }
 #map .legend .hint::before { display: none; }
+
+/* Health: a chunky bar under the wanted stars. */
+#health {
+  position: absolute; right: 22px; top: 70px; width: 196px; height: 16px;
+  background: #14110f; border: 2px solid #14110f; border-radius: 4px;
+  box-shadow: 3px 3px 0 #14110f; overflow: hidden;
+}
+#health .bar {
+  height: 100%; width: calc(100% * var(--hp, 1)); border-radius: 2px;
+  background: linear-gradient(#7be86a, #3fb83a); transition: width .15s;
+}
+#health.low .bar { background: linear-gradient(#ff7a6a, #e0302a); animation: hp-pulse .6s ease-in-out infinite alternate; }
+@keyframes hp-pulse { to { opacity: .55; } }
+
+/* Red edge flash when the player gets hurt. */
+#hurt {
+  position: absolute; inset: 0; opacity: 0;
+  background: radial-gradient(ellipse at center, transparent 55%, rgba(200,20,28,.85) 100%);
+}
+
+/* Weapon + ammo, bottom right (the speedo's spot, which is hidden on foot). */
+#weapon {
+  position: absolute; right: 24px; bottom: 20px; text-align: right;
+  font-weight: 900; font-style: italic;
+  -webkit-text-stroke: 2px #14110f; paint-order: stroke fill;
+  text-shadow: 3px 3px 0 #14110f;
+}
+#weapon .name { display: block; font-size: 18px; color: #fff; letter-spacing: .5px; text-transform: uppercase; }
+#weapon .ammo { display: block; font-size: 44px; color: #ffd23a; line-height: 1; }
+#weapon .ammo small { font-size: 18px; margin-left: 4px; opacity: .85; }
+#weapon.holstered .name { opacity: .7; }
+#weapon.holstered .ammo small { font-size: 16px; color: #fff; -webkit-text-stroke: 1.5px #14110f; }
+#weapon .reload {
+  height: 5px; margin-top: 4px; background: #14110f; border-radius: 3px;
+  visibility: hidden; position: relative;
+}
+#weapon.reloading .reload { visibility: visible; }
+#weapon.reloading .reload::after {
+  content: ''; position: absolute; inset: 1px auto 1px 1px; border-radius: 2px; background: #ffd23a;
+  width: calc((100% - 2px) * var(--reload, 0));
+}
+
+#banner.dead { opacity: 1; color: #c8141c; }
