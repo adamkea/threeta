@@ -14,6 +14,8 @@ import { PlayerController } from './player/PlayerController.js';
 import { createRng } from './core/random.js';
 import { InkRenderer } from './render/InkRenderer.js';
 import { SkidMarks } from './effects/SkidMarks.js';
+import { Wanted } from './police/Wanted.js';
+import { PoliceSystem } from './police/PoliceSystem.js';
 
 const canvas = document.getElementById('game');
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
@@ -68,7 +70,30 @@ const playerPed = new Pedestrian({ shirt: 0x6b3f22, inner: 0xf5f5f5, pants: 0x23
 scene.add(playerPed.mesh);
 const player = new PlayerController({ ped: playerPed, car: playerCar, traffic, npcs, scene });
 
-const allCars = () => player.freeCars.concat(traffic.cars);
+// --- Police & wanted level ---
+const wanted = new Wanted();
+const police = new PoliceSystem(scene, rng, { traffic, npcs });
+player.police = police;
+const isPoliceCar = (c) => police.owns(c) || (c.modelName === 'police' && traffic.drivers.has(c));
+player.onCarjack = (car) => {
+  if (car.modelName === 'police') wanted.report('stealPoliceCar');
+  else if (police.witnesses(car.position, world)) wanted.report('carjack');
+};
+// Running people over is always seen by someone — and hitting a cop is a big deal.
+const onKnockdown = (p, car) => {
+  if (car === player.vehicle) wanted.report(p.role === 'cop' ? 'hitCop' : 'hitPerson');
+};
+let ramCooldown = 0;
+const onCarHit = (a, b, impulse) => {
+  if (ramCooldown > 0 || impulse < 3 || !player.inVehicle) return;
+  const other = a === player.vehicle ? b : b === player.vehicle ? a : null;
+  if (other && isPoliceCar(other)) {
+    wanted.report('ramPolice');
+    ramCooldown = 1.5;
+  }
+};
+
+const allCars = () => player.freeCars.concat(traffic.cars, police.cars);
 const allPeds = () => (player.ped.active ? [player.ped] : []).concat(npcs.peds);
 traffic.populate({ x: SPAWN.x, z: SPAWN.z }, allCars());
 npcs.populate({ x: SPAWN.x, z: SPAWN.z });
@@ -82,6 +107,9 @@ const ZOOM = { car: [85, 120], foot: [40, 46] };
 const speedBox = document.getElementById('speed');
 const speedEl = document.getElementById('speed-value');
 const promptEl = document.getElementById('prompt');
+const wantedEl = document.getElementById('wanted');
+const starEls = [...wantedEl.querySelectorAll('i')];
+const bannerEl = document.getElementById('banner');
 
 function resize() {
   const w = window.innerWidth;
@@ -103,22 +131,67 @@ function resetPlayer() {
   }
 }
 
+// While being arrested the player has no control.
+const NO_INPUT = { throttle: 0, steer: 0, move: { x: 0, y: 0 }, isDown: () => false };
+let bustedTimer = 0;
+let bannerTimer = 0;
+const policeCtx = { player, wanted, world };
+
 /** One fixed physics step for everything. */
 function step(dt) {
   const cars = allCars();
   const peds = allPeds();
   const active = cars.filter((c) => c.active);
-  player.step(dt, input, world);
+  player.step(dt, bustedTimer > 0 ? NO_INPUT : input, world);
   traffic.step(dt, cars, world, peds.filter(onRoad));
+  police.step(dt, policeCtx);
   npcs.step(dt, world, peds, active, lights);
-  resolveCarCollisions(active);
-  resolvePedCarCollisions(peds, active);
+  resolveCarCollisions(active, 0.3, onCarHit);
+  resolvePedCarCollisions(peds, active, onKnockdown);
   resolvePedPedCollisions(peds);
+  ramCooldown = Math.max(0, ramCooldown - dt);
+}
+
+function showBanner(text, kind, time = 2.5) {
+  bannerEl.textContent = text;
+  bannerEl.className = kind;
+  bannerTimer = time;
+}
+
+/** Arrested: hand over the car, get released back at the start, slate wiped clean. */
+function finishArrest() {
+  player.forceExit(world);
+  player.ped.reset(SPAWN.x - 9, SPAWN.z);
+  wanted.clear();
+  police.standDown();
+}
+
+function updateWanted(dt) {
+  const hadStars = wanted.stars;
+  if (police.busted && bustedTimer === 0) {
+    bustedTimer = 3;
+    showBanner('BUSTED', 'busted', 3);
+  }
+  if (bustedTimer > 0) {
+    bustedTimer -= dt;
+    if (bustedTimer <= 0) (bustedTimer = 0), finishArrest();
+  } else {
+    wanted.update(dt, police.canSee(player.body.position, world));
+    if (hadStars && !wanted.stars) {
+      police.standDown();
+      showBanner('LOST THE COPS', 'escaped');
+    }
+  }
+  starEls.forEach((el, k) => el.classList.toggle('on', k < wanted.stars));
+  wantedEl.classList.toggle('evading', wanted.stars > 0 && !wanted.seen);
+  wantedEl.style.setProperty('--evade', wanted.evadeProgress);
+  bannerTimer -= dt;
+  if (bannerTimer <= 0) bannerEl.className = '';
 }
 
 // Dev-only hook for debugging / automated tests.
 if (import.meta.env.DEV) {
-  window.__game = { skids, player, traffic, npcs, lights, world, allCars, allPeds, step, input, STEP: 1 / 120 };
+  window.__game = { skids, player, traffic, npcs, lights, world, allCars, allPeds, step, input, wanted, police, STEP: 1 / 120 };
 }
 
 // --- Main loop: fixed-step physics, variable-rate rendering ---
@@ -130,8 +203,10 @@ function frame(now) {
   const dt = Math.min(0.1, (now - last) / 1000);
   last = now;
 
-  if (input.wasPressed('reset')) resetPlayer();
-  if (input.wasPressed('use')) player.use(allCars(), world);
+  if (bustedTimer === 0) {
+    if (input.wasPressed('reset')) resetPlayer();
+    if (input.wasPressed('use')) player.use(allCars(), world);
+  }
 
   acc += dt;
   while (acc >= STEP) {
@@ -148,6 +223,8 @@ function frame(now) {
     player.ped.syncMesh(dt);
   }
   traffic.manage(rig.focus, allCars());
+  updateWanted(dt);
+  police.manage(policeCtx, allCars());
   npcs.manage(dt, rig.focus);
   player.manage(rig.focus, disposeObject);
 
@@ -159,7 +236,8 @@ function frame(now) {
   speedBox.style.visibility = player.inVehicle ? 'visible' : 'hidden';
   speedEl.textContent = Math.round(player.body.speed * 3.6);
   const canEnter = player.findEnterableCar(allCars());
-  promptEl.textContent = player.inVehicle ? '' : canEnter ? (traffic.drivers.has(canEnter) ? 'F — hijack car' : 'F — get in') : '';
+  const occupied = traffic.drivers.has(canEnter) || police.owns(canEnter);
+  promptEl.textContent = player.inVehicle || bustedTimer > 0 ? '' : canEnter ? (occupied ? 'F — hijack car' : 'F — get in') : '';
 
   ink.render(scene, camera);
   input.endFrame();

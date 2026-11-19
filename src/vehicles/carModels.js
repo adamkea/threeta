@@ -348,10 +348,13 @@ export function buildCarMesh(name, color) {
   if (m.taxiSign) {
     add(new RoundedBoxGeometry(0.85, 0.26, 0.32, 2, 0.06), S.sign, 0, c.top + 0.25, roofZ);
   }
+  let siren = null;
   if (m.lightbar) {
+    // Per-car lamp materials so each car's siren can flash on its own (see Car.syncMesh).
+    siren = { red: S.red.clone(), blue: S.blue.clone() };
     add(new RoundedBoxGeometry(1.3, 0.12, 0.34, 2, 0.05), S.dark, 0, c.top + 0.18, roofZ + 0.1);
-    add(new RoundedBoxGeometry(0.55, 0.14, 0.28, 2, 0.05), S.red, -0.33, c.top + 0.27, roofZ + 0.1);
-    add(new RoundedBoxGeometry(0.55, 0.14, 0.28, 2, 0.05), S.blue, 0.33, c.top + 0.27, roofZ + 0.1);
+    add(new RoundedBoxGeometry(0.55, 0.14, 0.28, 2, 0.05), siren.red, -0.33, c.top + 0.27, roofZ + 0.1);
+    add(new RoundedBoxGeometry(0.55, 0.14, 0.28, 2, 0.05), siren.blue, 0.33, c.top + 0.27, roofZ + 0.1);
   }
   if (m.bed) {
     const z0 = -L / 2 + 0.2, z1 = pts[0][0] - 0.12;
@@ -383,5 +386,5 @@ export function buildCarMesh(name, color) {
     wheels.push({ pivot, spin, front });
   }
 
-  return { root, body, paint, roofPaint, stripeMat, stripeGroup, tailMat, wheels };
+  return { root, body, paint, roofPaint, stripeMat, stripeGroup, tailMat, wheels, siren };
 }

@@ -55,6 +55,8 @@ export class Car {
     this.stripeGroup = parts.stripeGroup;
     this.tailMat = parts.tailMat;
     this.wheels = parts.wheels;
+    this.sirenMats = parts.siren; // null unless the model has a lightbar
+    this.siren = false; // flashing lights on (police in pursuit)
     this.setStripes(stripes);
   }
 
@@ -261,5 +263,13 @@ export class Car {
       if (w.front) w.pivot.rotation.y = this.steer * 0.5;
     }
     this.tailMat.emissiveIntensity = this.braking ? 2.2 : 0.4;
+    if (this.sirenMats) {
+      // Alternate red / blue with a quick double-flash; dim and steady when off.
+      const t = performance.now() / 1000 + this.id * 0.37;
+      const phase = (t * 2.5) % 1;
+      const flash = (k) => this.siren && phase > k && phase < k + 0.5 && (phase - k) % 0.25 < 0.17;
+      this.sirenMats.red.color.setHex(flash(0) ? 0xff3040 : this.siren ? 0x4a0a10 : 0xa01820);
+      this.sirenMats.blue.color.setHex(flash(0.5) ? 0x4a8cff : this.siren ? 0x0a1440 : 0x1c3ea8);
+    }
   }
 }
