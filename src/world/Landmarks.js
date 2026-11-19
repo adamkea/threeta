@@ -12,7 +12,7 @@ import { toon } from '../render/toon.js';
 
 // Which blocks hold them is decided in CityLayout.js (assignUses).
 
-const BUILDERS = { police: policeStation, hospital, gunshop: gunShop };
+const BUILDERS = { police: policeStation, hospital, gunshop: gunShop, warehouse };
 
 /**
  * Builds one landmark centred on (cx, cz) with its ground floor at height y0.
@@ -22,9 +22,9 @@ const BUILDERS = { police: policeStation, hospital, gunshop: gunShop };
  * buildings you can walk into, is the spot on the pavement in front of the door: { x, z, heading },
  * heading pointing out of the door.
  */
-export function createLandmark(kind, cx, cz, y0, { colliders, windowTex, angle = 0 }) {
+export function createLandmark(kind, cx, cz, y0, { colliders, windowTex, angle = 0, name }) {
   const b = new Builder(cx, cz, angle, colliders, windowTex);
-  const spec = BUILDERS[kind](b);
+  const spec = BUILDERS[kind](b, { name });
   b.group.position.set(cx, y0, cz);
   b.group.rotation.y = angle;
   const [minX, minZ, maxX, maxZ] = spec.footprint;
@@ -45,6 +45,7 @@ export function createLandmark(kind, cx, cz, y0, { colliders, windowTex, angle =
     color: spec.color,
     buildings: (spec.buildings ?? []).map(({ rect, height, color }) => ({ ...bounds(b.toWorldRect(...rect)), height, color })),
     entrance: entrance ? { x: entrance.x, z: entrance.z, heading: angle } : null,
+    dropZone: spec.dropZone ? { ...b.toWorld(spec.dropZone.x, spec.dropZone.z), heading: angle, hw: spec.dropZone.hw, hd: spec.dropZone.hd } : null,
   };
 }
 
@@ -178,6 +179,59 @@ function gunShop(b) {
   };
 }
 
+/**
+ * A freight warehouse: a long corrugated shed across the back of the block with roller doors and
+ * a loading dock, and a yard out front with pallets, crates and a painted drop-off bay. Delivery
+ * missions end in the bay (see missions/MissionSystem.js, which lights it up while it's wanted).
+ */
+function warehouse(b, { name = 'Warehouse' } = {}) {
+  const SHED = 0x8d9298; // galvanised steel
+  const ROOF = 0x6a6f75;
+  const TRIM = 0xe0a526; // safety yellow
+  const DOOR = 0x4d5660;
+  const H = 8;
+
+  // The shed, with its own lip of roof and a sign board on the front.
+  b.box(-17, -17, 17, -1, 0, H, SHED, { solid: true, material: b.corrugated(SHED) });
+  b.box(-17.4, -17.4, 17.4, -0.6, H, H + 0.5, ROOF);
+  b.decal(0, -9, 26, 12, roofBadge(name.split(' ')[0].toUpperCase(), '#3b4148', '#e0a526', false), H + 0.51);
+  b.sign(-8, -1, 8, -0.6, H - 2.4, H - 0.4, signFace(name.toUpperCase(), '#1d2228', '#e0a526'));
+
+  // Three roller doors on a raised loading dock with yellow bumpers.
+  for (const x of [-11, 0, 11]) {
+    b.box(x - 3.4, -1, x + 3.4, -0.8, 0, 4.6, DOOR, { material: b.rollerDoor() });
+    b.box(x - 3.6, -0.8, x + 3.6, -0.6, 4.6, 4.9, TRIM);
+  }
+  b.box(-16, -1, 16, 0.6, 0, 1.0, 0x5d5a55, { solid: true }); // dock
+  for (const x of [-14.5, -7.5, -3.5, 3.5, 7.5, 14.5]) b.box(x - 0.3, 0.6, x + 0.3, 0.8, 0.3, 0.9, 0x1c1c1e);
+
+  // Yard clutter down both sides, out of the way of the drop-off bay.
+  const pallet = (x, z, h) => {
+    b.box(x - 0.6, z - 0.6, x + 0.6, z + 0.6, 0, 0.15, 0xa8834f, { solid: true });
+    if (h) b.box(x - 0.55, z - 0.55, x + 0.55, z + 0.55, 0.15, 0.15 + h, 0xc49a5c);
+  };
+  for (const [x, z, h] of [[-15, 3, 1.1], [-15, 4.6, 0.7], [-13.4, 3, 1.4], [-15, 7, 0], [14.8, 3.2, 1.2], [14.8, 4.8, 1.2], [13.2, 3.2, 0.6], [14.8, 9, 0]]) pallet(x, z, h);
+  b.box(-16, 9, -13.6, 15, 0, 2.6, 0x2d6b8f, { solid: true }); // a shipping container in the corner
+  b.box(-16.05, 8.95, -13.55, 9.05, 0.1, 2.5, 0x24566f);
+  // Bollards with yellow tops either side of the yard mouth.
+  for (const x of [-11, 11]) {
+    b.cylinder(x, 17, 0.18, 0, 1, 0x2a2d33, { solid: true });
+    b.cylinder(x, 17, 0.2, 1, 1.15, TRIM);
+  }
+
+  // The drop-off bay: hatched yellow box painted on the yard.
+  b.decal(0, 8, 8, 9, hatchedBay('DROP OFF'), 0.02);
+
+  return {
+    name,
+    footprint: [-17.4, -17.4, 17.4, -0.6],
+    height: H,
+    color: SHED,
+    respawn: [0, 14],
+    dropZone: { x: 0, z: 8, hw: 4, hd: 4.5 },
+  };
+}
+
 /** Accumulates a landmark's meshes in a group, and its solid parts as world-space colliders. */
 class Builder {
   constructor(cx, cz, angle, colliders, windowTex) {
@@ -250,6 +304,34 @@ class Builder {
         ctx.fillStyle = i % 2 ? '#f5f1e8' : '#c8141c';
         ctx.fillRect((i * w) / 16, 0, w / 16, h);
       }
+    });
+    return toon({ map: tex });
+  }
+
+  /** Ribbed sheet-metal wall material. */
+  corrugated(color) {
+    const tex = labelTexture(64, 64, (ctx, w, h) => {
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(0, 0, w, h);
+      for (let i = 0; i < 8; i++) {
+        ctx.fillStyle = 'rgba(0,0,0,0.16)';
+        ctx.fillRect((i * w) / 8, 0, w / 16, h);
+      }
+    });
+    tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+    tex.repeat.set(8, 2);
+    const side = toon({ map: tex, color });
+    const top = this.mat(0x6a6f75);
+    return [side, side, top, top, side, side];
+  }
+
+  /** Slatted roller-shutter material. */
+  rollerDoor() {
+    const tex = labelTexture(64, 128, (ctx, w, h) => {
+      ctx.fillStyle = '#9aa3ad';
+      ctx.fillRect(0, 0, w, h);
+      ctx.fillStyle = '#5d6670';
+      for (let y = 0; y < h; y += 8) ctx.fillRect(0, y, w, 2);
     });
     return toon({ map: tex });
   }
@@ -342,8 +424,8 @@ function signFace(text, bg, fg, withCross = false) {
   });
 }
 
-/** Roof marking: a rounded panel with a star badge and the station's name. */
-function roofBadge(text, bg, fg) {
+/** Roof marking: a rounded panel with (optionally) a star badge and the building's name. */
+function roofBadge(text, bg, fg, withStar = true) {
   return labelTexture(512, 256, (ctx, w, h) => {
     ctx.fillStyle = bg;
     ctx.beginPath();
@@ -355,12 +437,12 @@ function roofBadge(text, bg, fg) {
     ctx.roundRect(22, 22, w - 44, h - 44, 18);
     ctx.stroke();
     ctx.fillStyle = '#f2c230';
-    star(ctx, 120, h / 2, 74);
+    if (withStar) star(ctx, 120, h / 2, 74);
     ctx.fillStyle = fg;
     ctx.font = 'bold 84px sans-serif';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.fillText(text, 320, h / 2 + 4);
+    ctx.fillText(text, withStar ? 320 : w / 2, h / 2 + 4, withStar ? 300 : w - 70);
   });
 }
 
@@ -419,7 +501,7 @@ function redCross(onWhite) {
   });
 }
 
-function hatchedBay() {
+function hatchedBay(label = 'AMBULANCE') {
   return labelTexture(128, 224, (ctx, w, h) => {
     ctx.strokeStyle = '#f2c230';
     ctx.lineWidth = 8;
@@ -439,6 +521,6 @@ function hatchedBay() {
     ctx.fillStyle = '#f2c230';
     ctx.font = 'bold 22px sans-serif';
     ctx.textAlign = 'center';
-    ctx.fillText('AMBULANCE', w / 2, h - 16);
+    ctx.fillText(label, w / 2, h - 16, w - 20);
   });
 }

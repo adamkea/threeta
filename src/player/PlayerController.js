@@ -169,7 +169,7 @@ export class PlayerController {
   /** Drop parked cars that are far from the action. */
   manage(focus, dispose) {
     this.freeCars = this.freeCars.filter((c) => {
-      if (c === this.vehicle) return true;
+      if (c === this.vehicle || c.keep) return true; // `keep`: wanted by a mission
       if (Math.hypot(c.position.x - focus.x, c.position.y - focus.z) < 220) return true;
       this.scene.remove(c.mesh);
       dispose(c.mesh);

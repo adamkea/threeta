@@ -77,11 +77,12 @@ html, body {
 }
 #map canvas { display: block; border-radius: 2px; }
 #map .legend {
-  position: absolute; left: 10px; bottom: 10px; line-height: 1.4;
-  display: flex; gap: 12px; align-items: center;
+  position: absolute; left: 10px; right: 10px; bottom: 10px; line-height: 1.4;
+  display: flex; flex-wrap: wrap; gap: 2px 12px; align-items: center;
   font-size: 13px; font-weight: 700;
   background: rgba(20,17,15,.75); padding: 5px 10px; border-radius: 4px;
 }
+#map .legend span { white-space: nowrap; }
 #map .legend span::before {
   content: ''; display: inline-block; width: 9px; height: 9px; margin-right: 5px;
   border-radius: 50%; border: 2px solid #14110f; vertical-align: -1px;
@@ -92,6 +93,8 @@ html, body {
 #map .legend .station::before { background: #22385c; box-shadow: inset 0 0 0 2px #f2c230; }
 #map .legend .hospital::before { background: #fff linear-gradient(#d23a2f, #d23a2f) center / 3px 7px no-repeat; }
 #map .legend .gunshop::before { background: #26354d; box-shadow: inset 0 0 0 2px #f2c230; }
+#map .legend .warehouse::before { background: #e0a526; border-radius: 2px; }
+#map .legend .phone::before { background: #5be37a; }
 #map .legend .hint { opacity: .7; font-weight: 400; }
 #map .legend .hint::before { display: none; }
 
@@ -235,3 +238,34 @@ html, body {
 #shop .msg { font-weight: 700; font-size: 14px; }
 #shop .msg.bad { color: #c8141c; }
 #shop .hint { margin: 6px 16px 0; font-size: 12px; opacity: .7; }
+
+/* Mission panel: top centre — what the job is, what to do next, and the clock. */
+#mission {
+  position: absolute; left: 50%; top: 14px; transform: translateX(-50%);
+  min-width: 260px; max-width: 70vw; text-align: center;
+  background: rgba(20,17,15,.72); border: 2px solid #14110f; border-radius: 6px;
+  box-shadow: 4px 4px 0 #14110f; padding: 6px 16px 8px;
+  opacity: 0; transition: opacity .25s;
+}
+#mission.open { opacity: 1; }
+#mission .title {
+  font-size: 13px; font-weight: 900; letter-spacing: 2px; text-transform: uppercase; color: #5be37a;
+}
+#mission.bad .title { color: #ff5a4a; }
+#mission .objective { font-size: 19px; font-weight: 800; font-style: italic; }
+#mission .timer {
+  font-size: 30px; font-weight: 900; font-style: italic; color: #ffd23a; line-height: 1.1;
+  -webkit-text-stroke: 2px #14110f; paint-order: stroke fill; text-shadow: 3px 3px 0 #14110f;
+}
+#mission .timer:empty { display: none; }
+#mission .timer.low { color: #ff5a4a; animation: star-blink .5s steps(2, jump-none) infinite; }
+
+/* Arrow at the screen edge pointing to the objective when it's off screen. */
+#objective-arrow {
+  position: absolute; left: 0; top: 0; display: none;
+  width: 0; height: 0;
+  border-top: 14px solid transparent; border-bottom: 14px solid transparent;
+  border-left: 30px solid #ffd23a;
+  filter: drop-shadow(0 0 0 #14110f) drop-shadow(2px 2px 0 #14110f) drop-shadow(-1px -1px 0 #14110f);
+}
+#objective-arrow.van { border-left-color: #4fb3ff; }

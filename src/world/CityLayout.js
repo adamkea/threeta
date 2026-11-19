@@ -571,12 +571,20 @@ function assignUses(layout, rng) {
   // Landmarks: blocks big enough for them, near where they'd sit in town.
   // The gun shop goes on the nearest big-enough block to the starting car park, so it's easy to find.
   const sc = start.b.center;
-  for (const [kind, x, z] of [['police', -0.3 * half, 0.15 * half], ['hospital', 0.3 * half, -0.35 * half], ['gunshop', sc.x, sc.z]]) {
+  // Warehouses (where delivery missions drop off) sit out towards the docks, on opposite sides of town.
+  const sites = [
+    ['police', -0.3 * half, 0.15 * half],
+    ['hospital', 0.3 * half, -0.35 * half],
+    ['gunshop', sc.x, sc.z],
+    ['warehouse', 0.7 * half, 0.65 * half, 'Dockside Freight'],
+    ['warehouse', -0.7 * half, -0.6 * half, 'Northgate Storage'],
+  ];
+  for (const [kind, x, z, name] of sites) {
     const found = nearest(x, z, (b) => fitRect(b, b.frame, 19, 19));
     if (!found) continue;
     const { b, fit } = found;
     b.use = kind;
-    layout.landmarks.push({ kind, block: b, cx: fit.x, cz: fit.z, angle: b.frame.angle });
+    layout.landmarks.push({ kind, name, block: b, cx: fit.x, cz: fit.z, angle: b.frame.angle });
   }
 
   for (const b of blocks) {

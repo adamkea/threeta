@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { createRng } from '../core/random.js';
 import { toon } from '../render/toon.js';
 import { createLandmark } from './Landmarks.js';
+import { createPayPhones } from './PayPhones.js';
 import { createStreetGrime } from './StreetGrime.js';
 import { CITY, LAYOUT, LOT, WATER_Y, blockAt, groundHeight, offIsland, toWorld } from './CityLayout.js';
 import {
@@ -48,7 +49,7 @@ export function createCity(seed = 1337) {
     else if (b.use === 'park') parks.push(b);
   }
   for (const l of LAYOUT.landmarks) {
-    const lm = createLandmark(l.kind, l.cx, l.cz, CITY.curbHeight, { colliders, windowTex, angle: l.angle });
+    const lm = createLandmark(l.kind, l.cx, l.cz, CITY.curbHeight, { colliders, windowTex, angle: l.angle, name: l.name });
     group.add(lm.group);
     landmarks.push(lm);
     buildings.push({ ...lm.footprint, color: lm.color }, ...lm.buildings);
@@ -75,6 +76,10 @@ export function createCity(seed = 1337) {
   const grime = createStreetGrime({ ...extras, colliders, seed: seed + 11 });
   group.add(grime.group);
 
+  // Pay phones go in last, so they can keep clear of everything else on the sidewalks.
+  const payPhones = createPayPhones(createRng(seed + 23), blocks, colliders, CITY.curbHeight);
+  group.add(payPhones.group);
+
   return {
     group,
     colliders,
@@ -84,6 +89,7 @@ export function createCity(seed = 1337) {
     blocks,
     landmarks,
     parkingSpots: parking.spots,
+    payPhones: payPhones.phones,
     /** Per-frame animation of the city dressing (manhole steam). */
     update: grime.update,
   };
