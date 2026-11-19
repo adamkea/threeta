@@ -85,7 +85,9 @@ export class PursuitDriver {
     if (Math.abs(angle) > 1.2) desired = Math.min(desired, 9); // way off line: slow and turn
     if (this.direct && stopNear > 0) {
       // Pull up beside a slow target rather than through it.
-      desired = Math.min(desired, Math.max(0, (dist - stopNear) * 1.2) + target.velocity.length());
+      // Inside the stop distance, stop — don't keep pace with (and bulldoze) someone on foot.
+      const keepPace = dist > stopNear ? target.velocity.length() : 0;
+      desired = Math.min(desired, Math.max(0, (dist - stopNear) * 1.2) + keepPace);
     }
 
     // Target behind us and we're slow: three-point turn by reversing with opposite lock.
