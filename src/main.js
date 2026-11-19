@@ -257,7 +257,6 @@ function finishArrest() {
   traffic.repopulate(focus, allCars());
   npcs.repopulate(focus);
   parked.manage(focus, allCars(), disposeObject, 0);
-  showBanner(respawnAt.name.toUpperCase(), 'escaped', 2);
 }
 
 function updateWanted(dt) {
