@@ -20,6 +20,7 @@ const _s = new THREE.Vector3();
 const _c = new THREE.Color();
 const _v = new THREE.Vector2();
 const WHITE = new THREE.Color(0xffffff);
+const _one = new THREE.Vector3(1, 1, 1);
 const FLAME_HOT = new THREE.Color(0xfff2a0);
 const FLAME_COOL = new THREE.Color(0xe0361a);
 
@@ -176,9 +177,12 @@ export class VehicleDamageSystem {
 
   /** A part knocked off a car: a copy tumbles away and lies in the road for a while. */
   #throwPart(car, part, speed = 5) {
-    part.updateWorldMatrix(true, false);
+    // Where the part sits on the car. Built from its own placement rather than its world matrix:
+    // a shed part is hidden by scaling it to nothing (see bakeCar in carModels.js).
+    part.parent.updateWorldMatrix(true, false);
+    _m.compose(part.position, part.quaternion, _one).premultiply(part.parent.matrixWorld);
     const mesh = part.clone();
-    part.matrixWorld.decompose(mesh.position, mesh.quaternion, mesh.scale);
+    _m.decompose(mesh.position, mesh.quaternion, mesh.scale);
     mesh.visible = true;
     this.scene.add(mesh);
     const out = _v.set(mesh.position.x - car.position.x, mesh.position.z - car.position.y).normalize();

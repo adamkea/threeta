@@ -1,24 +1,33 @@
+const _near = [];
+const _ca = new Float64Array(4);
+const _cb = new Float64Array(4);
+
 /**
  * Resolves car-vs-car overlaps (each car = two circles) with an equal-mass impulse,
  * plus a bit of spin so glancing hits rotate the cars. `onHit(a, b, impulse)` is told about
  * every impact (used to spot the player ramming police). Both cars take crash damage from the
- * hardest hit each suffered this step (see VehicleDamage.impact).
+ * hardest hit each suffered this step (see VehicleDamage.impact). `grid` is a SpatialHash of `cars`.
  */
 const hardest = new Map(); // car -> { dv, by }
-export function resolveCarCollisions(cars, restitution = 0.3, onHit = null) {
+export function resolveCarCollisions(cars, grid, restitution = 0.3, onHit = null) {
   hardest.clear();
   const note = (car, dv, by) => {
     const h = hardest.get(car);
     if (!h || dv > h.dv) hardest.set(car, { dv, by });
   };
-  for (let i = 0; i < cars.length; i++) {
-    const a = cars[i];
-    for (let j = i + 1; j < cars.length; j++) {
-      const b = cars[j];
+  for (const a of cars) {
+    // Each nearby pair once (lower id handles it). Cars move < 1 m between the grid rebuild and
+    // here, hence the margin on the 6 m pair range.
+    for (const b of grid.query(a.position.x, a.position.y, 7, _near)) {
+      if (b.id <= a.id || !b.active || b.overboard) continue;
       if (a.position.distanceToSquared(b.position) > 36) continue;
       const r = a.cfg.collisionRadius + b.cfg.collisionRadius;
-      for (const [ax, az] of a.collisionCircles()) {
-        for (const [bx, bz] of b.collisionCircles()) {
+      a.collisionCircles(_ca);
+      b.collisionCircles(_cb);
+      for (let i = 0; i < 2; i++) {
+        const ax = _ca[i * 2], az = _ca[i * 2 + 1];
+        for (let j = 0; j < 2; j++) {
+          const bx = _cb[j * 2], bz = _cb[j * 2 + 1];
           let nx = bx - ax;
           let nz = bz - az;
           const dist = Math.hypot(nx, nz);

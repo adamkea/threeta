@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { Car } from '../vehicles/Car.js';
 import { CITY } from '../world/City.js';
-import { DIRS, HALF_ROAD, LANE_OFFSET, headingOf, isValidNode, nodeX, rightOf } from '../traffic/RoadNetwork.js';
+import { DIRS, HALF_ROAD, LANE_OFFSET, headingOf, isValidNode, nodeRange, nodeX, rightOf } from '../traffic/RoadNetwork.js';
 import { PursuitDriver } from './PursuitDriver.js';
 import { clearLine } from './sight.js';
 import { WEAPONS, Weapon } from '../combat/weapons.js';
@@ -158,7 +158,7 @@ export class PoliceSystem {
         // Right on top of them: stop and get out rather than nudging them down the street.
         const stopped = car.speed < (dist < 6 ? 7 : 3);
         if (playerSlow && dist < DEPLOY_RANGE && stopped && u.cooldown === 0 && (u.driver.direct || dist < 6)) {
-          const side = car.right.multiplyScalar(-(car.cfg.width / 2 + 0.8));
+          const side = car.right.clone().multiplyScalar(-(car.cfg.width / 2 + 0.8));
           u.officer = this.npcs.spawnCop(car.position.x + side.x, car.position.y + side.y, car.heading);
           u.officer.unit = u;
           u.officer.goalSpeed = COP_RUN;
@@ -318,10 +318,12 @@ export class PoliceSystem {
     const tp = target.position;
     const v = target.velocity;
     const moving = v.length() > 8;
-    const n = CITY.blocks;
+    const ri = nodeRange(tp.x, SPAWN_MAX);
+    const rj = nodeRange(tp.y, SPAWN_MAX);
+    if (!ri || !rj) return false;
     for (let t = 0; t < 10; t++) {
-      const i = this.rng.int(0, n);
-      const j = this.rng.int(0, n);
+      const i = this.rng.int(ri[0], ri[1]);
+      const j = this.rng.int(rj[0], rj[1]);
       const d = this.rng.pick(DIRS);
       if (!isValidNode(i + d[0], j + d[1])) continue;
       const r = rightOf(d);

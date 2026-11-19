@@ -1,6 +1,8 @@
 import * as THREE from 'three';
 import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeometry.js';
+import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { toon } from '../render/toon.js';
+import { bindPart, boneOf, rigMesh, showBone, usePalette, worldSkeleton } from '../render/skinBake.js';
 
 /*
  * Car body styles. Cabin numbers are fractions of the car's length, measured along +Z (forward):
@@ -421,5 +423,134 @@ export function buildCarMesh(name, color) {
     wheels.push({ pivot, spin, front, tyre });
   }
 
-  return { root, body, paint, roofPaint, stripeMat, stripeGroup, tailMat, headMat, wheels, siren, loose };
+  // Loose parts and tyres can be hidden one by one (shed in a crash, burnt off), so each gets
+  // its own bone.
+  const toggles = [...loose, ...wheels.map((w) => w.tyre)];
+  const { colors, boneFor } = bakeCar(name, root, [root, body, stripeGroup, ...wheels.map((w) => w.spin)], toggles, L, W);
+  return {
+    root,
+    body,
+    paint: colors(paint),
+    roofPaint: colors(roofPaint),
+    stripeMat: colors(stripeMat),
+    stripeGroup,
+    tailMat,
+    headMat,
+    wheels: wheels.map((w) => ({ ...w, tyre: boneFor(w.tyre) })),
+    siren: siren && { red: colors(siren.red), blue: colors(siren.blue) },
+    loose: loose.map(boneFor),
+  };
+}
+
+/** Merged geometry per model and bucket (see bakeCar); identical for every car of a model. */
+const bakedCache = new Map();
+
+/**
+ * Replace a freshly built car's ~50 meshes with a few SkinnedMeshes on one skeleton (body,
+ * stripes, each wheel's spin), so a car costs a handful of draw calls instead of dozens.
+ * Plain-colour toon parts share one mesh (two: shadow-casting or not), as do plain unlit
+ * parts; their colours come from per-car palettes. Anything else (lamps, textures, the
+ * transparent contact shadow) keeps its own material, one mesh per material.
+ *
+ * Each mesh in `toggles` gets a bone of its own standing in for it (`boneFor(mesh)`): setting
+ * the bone's `visible` shows / hides the part, and its `clone()` gives a real mesh of the part
+ * in its current colours (for debris).
+ *
+ * `colors(material)` gives a `{ color }` stand-in for a merged material, so recolouring
+ * (paint jobs, damage, stripes, sirens) still works by setting `.color`.
+ */
+function bakeCar(name, root, bones, toggles, L, W) {
+  root.updateMatrixWorld(true);
+  const stand = new Map(); // toggle mesh -> its bone
+  for (const mesh of toggles) {
+    const bone = new THREE.Object3D();
+    bone.position.copy(mesh.position);
+    bone.quaternion.copy(mesh.quaternion);
+    bone.scale.copy(mesh.scale);
+    mesh.parent.add(bone);
+    bone.updateMatrixWorld();
+    stand.set(mesh, bone);
+    bones = [...bones, bone];
+  }
+  const boneSet = new Set(bones);
+  const isBone = (o) => boneSet.has(o);
+  const toonSlots = new Map(); // material -> palette slot
+  const basicSlots = new Map();
+  const ordinals = new Map(); // other materials, numbered in build order (stable per model)
+  const slotOf = (map, mat) => (map.has(mat) ? map.get(mat) : map.set(mat, map.size).get(mat));
+  const buckets = new Map(); // key -> { kind, material, castShadow, renderOrder, parts: [] }
+  const meshes = [];
+  root.traverse((o) => o.isMesh && meshes.push(o));
+  for (const mesh of meshes) {
+    const mat = mesh.material;
+    let kind = 'own', slot = 0, key;
+    if (mat.isMeshToonMaterial && !mat.map) (kind = 'toon'), (slot = slotOf(toonSlots, mat));
+    else if (mat.isMeshBasicMaterial && !mat.map && !mat.transparent) (kind = 'basic'), (slot = slotOf(basicSlots, mat));
+    key = kind === 'own' ? `own${slotOf(ordinals, mat)}-${mesh.castShadow}` : `${kind}-${mesh.castShadow}`;
+    if (!buckets.has(key)) buckets.set(key, { kind, material: mat, castShadow: mesh.castShadow, renderOrder: 0, parts: [] });
+    const b = buckets.get(key);
+    b.renderOrder = Math.max(b.renderOrder, mesh.renderOrder);
+    b.parts.push({ mesh, slot });
+  }
+
+  let cached = bakedCache.get(name);
+  if (!cached) {
+    cached = new Map();
+    for (const [key, b] of buckets) {
+      const uv = b.kind === 'own' && !!b.material.map;
+      const geos = b.parts.map(({ mesh, slot }) => {
+        const bone = stand.get(mesh) ?? boneOf(mesh, isBone);
+        return bindPart(mesh.geometry, mesh, bone, bones.indexOf(bone), slot, uv);
+      });
+      const geometry = mergeGeometries(geos);
+      geometry.userData.shared = true;
+      cached.set(key, geometry);
+    }
+    bakedCache.set(name, cached);
+  }
+
+  for (const mesh of meshes) mesh.removeFromParent();
+  const palette = (slots) => [...slots.keys()].map((m) => m.color.clone());
+  const toonPalette = palette(toonSlots);
+  const basicPalette = palette(basicSlots);
+  const toonMat = toonSlots.size ? usePalette(toon(), toonPalette) : null;
+  const basicMat = basicSlots.size ? usePalette(new THREE.MeshBasicMaterial(), basicPalette) : null;
+  const skeleton = worldSkeleton(bones);
+  const bounds = new THREE.Sphere(new THREE.Vector3(0, 0.9, 0), Math.hypot(L / 2, W / 2) + 0.6);
+  for (const [key, b] of buckets) {
+    const material = b.kind === 'toon' ? toonMat : b.kind === 'basic' ? basicMat : b.material;
+    const mesh = rigMesh(cached.get(key), material, skeleton, bounds);
+    mesh.castShadow = b.castShadow;
+    mesh.renderOrder = b.renderOrder;
+    root.add(mesh);
+  }
+
+  // One stand-in per material, so parts sharing a material (e.g. paint and roof) stay the same object.
+  const standIns = new Map();
+  const colors = (mat) => {
+    if (!standIns.has(mat)) {
+      if (toonSlots.has(mat)) standIns.set(mat, { color: toonPalette[toonSlots.get(mat)] });
+      else if (basicSlots.has(mat)) standIns.set(mat, { color: basicPalette[basicSlots.get(mat)] });
+      else standIns.set(mat, mat);
+    }
+    return standIns.get(mat);
+  };
+
+  for (const [mesh, bone] of stand) {
+    Object.defineProperty(bone, 'visible', {
+      get() {
+        return this.scale.x !== 0;
+      },
+      set(on) {
+        showBone(this, on);
+      },
+    });
+    bone.clone = () => {
+      const copy = mesh.clone();
+      const c = colors(mesh.material);
+      if (c !== mesh.material) (copy.material = mesh.material.clone()), copy.material.color.copy(c.color);
+      return copy;
+    };
+  }
+  return { colors, boneFor: (mesh) => stand.get(mesh) };
 }

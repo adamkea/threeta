@@ -1,12 +1,17 @@
 import { CITY } from '../world/City.js';
 import {
-  DIRS, EXIT_DIST, LANE_OFFSET, STOP_DIST, axisOf, isValidNode, nodeX, rightOf,
+  DIRS, EXIT_DIST, LANE_OFFSET, STOP_DIST, axisOf, isValidNode, nodeRange, nodeX, rightOf,
 } from './RoadNetwork.js';
 
 const DECEL = 6; // comfortable braking (m/s²) used for speed planning
 const TURN_SPEED = 6.5;
 const FOLLOW_GAP = 3; // metres bumper-to-bumper when queued
 const CAR_LEN = 4.4;
+const MAX_CLOSING = 40; // m/s: faster than any car, for sizing the oncoming-lane search
+// Neighbour lists from the grid (drivers update one at a time, so these can be shared).
+const _cars = [];
+const _peds = [];
+const _wide = [];
 
 
 /**
@@ -90,11 +95,12 @@ export class TrafficDriver {
   }
 
   /**
-   * Returns controls for this physics step. `cars` = every car in the world (incl. player's),
-   * `peds` = people who might be in the road.
+   * Returns controls for this physics step. `near` = the step's Neighbourhood (grids of cars
+   * and of people standing in the road).
    */
-  update(dt, cars, lights, peds = []) {
+  update(dt, near, lights) {
     const car = this.car;
+    this.near = near;
     if (this.lost) {
       this.lostTime += dt;
       if (this.lostTime > 1.5 && car.speed < 2) this.#rejoin();
@@ -105,6 +111,10 @@ export class TrafficDriver {
     const fwd = car.forward;
     const right = car.right;
     const vF = car.velocity.dot(fwd);
+    // Everything the checks below look at is within 25 m (cars) / 20 m (people), plus a margin
+    // for cars that have already moved this step.
+    const cars = near.cars.query(pos.x, pos.y, 26, _cars);
+    const peds = near.roadPeds.query(pos.x, pos.y, 21, _peds);
 
     // --- Track progress along the route polyline ---
     let proj;
@@ -166,7 +176,9 @@ export class TrafficDriver {
       if (stop.turning) desired = Math.min(desired, Math.sqrt(TURN_SPEED ** 2 + 2 * DECEL * Math.max(0, dist)));
       const light = lights.state(stop.node[0], stop.node[1], stop.axis);
       const canStop = dist > (vF * vF) / (2 * DECEL * 1.5);
-      const mustYield = stop.leftTurn && dist > -0.5 && this.#oncomingTraffic(cars, stop);
+      // (Yielding only matters within braking range: from 20 m out, sqrt(2·DECEL·dist) is
+      // already above any cruise speed, so further away there's nothing to check.)
+      const mustYield = stop.leftTurn && dist > -0.5 && dist < 20 && this.#oncomingTraffic(stop);
       if (light === 'red' || (light === 'yellow' && canStop) || mustYield) {
         if (dist > -0.5) {
           desired = Math.min(desired, Math.sqrt(2 * DECEL * Math.max(0, dist - 0.3)));
@@ -178,7 +190,7 @@ export class TrafficDriver {
     if (this.ignoreCrossingTime > 0) this.ignoreCrossingTime -= dt;
     const follow = this.#followLimit(cars, peds, fwd, right, this.ignoreCrossingTime > 0);
     desired = Math.min(desired, follow.limit);
-    this.#updateOvertake(dt, follow.blocker, stop, waitingForLight, cars);
+    this.#updateOvertake(dt, follow.blocker, stop, waitingForLight);
     if (this.overtaking) {
       // Crawl while pulling out until our side is clear of the car we're passing.
       // Crawl while pulling out, and never drive into what we're passing.
@@ -220,9 +232,12 @@ export class TrafficDriver {
     const pos = this.car.position;
     const fwd = this.car.forward;
     let best = null;
-    const n = CITY.blocks;
-    for (let i = 0; i <= n; i++) {
-      for (let j = 0; j <= n; j++) {
+    // Only lanes that could be within the 10 m we'll accept.
+    const ri = nodeRange(pos.x, 10);
+    const rj = nodeRange(pos.y, 10);
+    if (!ri || !rj) return;
+    for (let i = ri[0]; i <= ri[1]; i++) {
+      for (let j = rj[0]; j <= rj[1]; j++) {
         for (const d of DIRS) {
           if (!isValidNode(i + d[0], j + d[1]) || d[0] * fwd.x + d[1] * fwd.y < 0.3) continue;
           const r = rightOf(d);
@@ -252,11 +267,12 @@ export class TrafficDriver {
   }
 
   /** Pull into the oncoming lane to pass a car that's stopped in our lane (e.g. the player). */
-  #updateOvertake(dt, blocker, stop, waitingForLight, cars) {
+  #updateOvertake(dt, blocker, stop, waitingForLight) {
     if (this.overtaking) {
       const o = this.overtaking;
       o.time += dt;
-      const rel = o.car.position.clone().sub(this.car.position).dot(this.car.forward);
+      const f = this.car.forward;
+      const rel = (o.car.position.x - this.car.position.x) * f.x + (o.car.position.y - this.car.position.y) * f.y;
       if (rel < -6 || o.time > 12 || !o.car.active) {
         this.overtaking = null;
         this.shift = Math.max(0, this.#lateralOffset()); // ease back from where we actually are
@@ -268,7 +284,7 @@ export class TrafficDriver {
     const nearJunction =
       stop && blocker && (stop.x - blocker.position.x) * stop.dir[0] + (stop.z - blocker.position.y) * stop.dir[1] < 14;
     const curving = this.points[1].curve;
-    if (stoppedBlocker && !waitingForLight && !curving && !nearJunction && this.#oncomingLaneClear(cars, blocker)) {
+    if (stoppedBlocker && !waitingForLight && !curving && !nearJunction && this.#oncomingLaneClear(blocker)) {
       this.blockedTime += dt;
       if (this.blockedTime > 2.5) {
         this.overtaking = { car: blocker, time: 0 };
@@ -278,8 +294,10 @@ export class TrafficDriver {
   }
 
   /** Left turns yield to oncoming cars heading through the same junction (unless also turning left). */
-  #oncomingTraffic(cars, stop) {
+  #oncomingTraffic(stop) {
     const me = this.car;
+    // The zone is 0..40 m past our stop line, up to 12 m to the left.
+    const cars = this.near.cars.query(stop.x + stop.dir[0] * 20, stop.z + stop.dir[1] * 20, 34, _wide);
     const [dx, dz] = stop.dir;
     const [rx, rz] = rightOf(stop.dir);
     for (const o of cars) {
@@ -317,10 +335,23 @@ export class TrafficDriver {
   }
 
   /** Nothing in the oncoming lane between us and a bit past the obstacle (or heading our way soon). */
-  #oncomingLaneClear(cars, blocker) {
+  #oncomingLaneClear(blocker) {
     const me = this.car;
     const fwd = me.forward, right = me.right;
     const bAlong = (blocker.position.x - me.position.x) * fwd.x + (blocker.position.y - me.position.y) * fwd.y;
+    // Search a strip along the oncoming lane: from just behind us to past the blocker, far enough
+    // ahead to see anything that could close the gap at up to MAX_CLOSING.
+    const x0 = me.position.x, z0 = me.position.y;
+    const reach = bAlong + 10 + MAX_CLOSING * 4;
+    const lx = -right.x, lz = -right.y; // left
+    let minX = Infinity, minZ = Infinity, maxX = -Infinity, maxZ = -Infinity;
+    for (const a of [-4, reach]) {
+      for (const l of [0, 11]) {
+        const x = x0 + fwd.x * a + lx * l, z = z0 + fwd.y * a + lz * l;
+        minX = Math.min(minX, x), maxX = Math.max(maxX, x), minZ = Math.min(minZ, z), maxZ = Math.max(maxZ, z);
+      }
+    }
+    const cars = this.near.cars.queryBox(minX - 1, minZ - 1, maxX + 1, maxZ + 1, _wide);
     for (const o of cars) {
       if (o === me || o === blocker || !o.active) continue;
       const rx = o.position.x - me.position.x, rz = o.position.y - me.position.y;
