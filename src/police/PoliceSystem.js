@@ -155,7 +155,9 @@ export class PoliceSystem {
         u.ghost.velocity = u.lastVel;
         controls = u.driver.update(dt, u.ghost, world, playerSlow ? 7 : 0);
         // Close to a stopped (or on-foot) suspect: an officer gets out to make the arrest.
-        if (playerSlow && dist < DEPLOY_RANGE && car.speed < 3 && u.cooldown === 0 && u.driver.direct) {
+        // Right on top of them: stop and get out rather than nudging them down the street.
+        const stopped = car.speed < (dist < 6 ? 7 : 3);
+        if (playerSlow && dist < DEPLOY_RANGE && stopped && u.cooldown === 0 && (u.driver.direct || dist < 6)) {
           const side = car.right.multiplyScalar(-(car.cfg.width / 2 + 0.8));
           u.officer = this.npcs.spawnCop(car.position.x + side.x, car.position.y + side.y, car.heading);
           u.officer.unit = u;

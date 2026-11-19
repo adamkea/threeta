@@ -283,10 +283,10 @@ export class Pedestrian {
   }
 
   /** Thrown by an impact (e.g. hit by a car). */
-  knockDown(impulse) {
+  knockDown(impulse, downTime = 2.2) {
     this.velocity.copy(impulse);
     if (this.dead) return; // bodies just get shoved about
-    this.downTime = 2.2;
+    this.downTime = Math.max(this.downTime, downTime);
     this.justKnocked = true;
     if (impulse.lengthSq() > 0.01) this.heading = Math.atan2(-impulse.x, -impulse.y); // fall backwards
   }
