@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeometry.js';
 import { toon } from '../render/toon.js';
+import { Health } from '../combat/Health.js';
 
 /** Smooth solid of revolution from (radius, y) pairs, squashed front-to-back by `depth`. */
 function lathe(profile, depth = 1, segments = 24) {
@@ -93,6 +94,9 @@ function pedGeometry() {
     thighStripe: new RoundedBoxGeometry(0.03, THIGH - 0.02, 0.07, 1, 0.012),
     shinStripe: new RoundedBoxGeometry(0.03, SHIN - 0.08, 0.06, 1, 0.012),
     armStripe: new RoundedBoxGeometry(0.03, UPPER_ARM - 0.02, 0.055, 1, 0.012),
+    // Handgun, modelled in the hand's frame: barrel along -Y (down the arm), grip along -Z.
+    gunSlide: new RoundedBoxGeometry(0.075, 0.27, 0.09, 1, 0.015).translate(0, -0.1, 0.02),
+    gunGrip: new RoundedBoxGeometry(0.07, 0.08, 0.16, 1, 0.015).rotateX(-0.25).translate(0, 0.01, -0.08),
   };
   for (const g of Object.values(sharedGeo)) g.userData.shared = true;
   return sharedGeo;
@@ -111,6 +115,7 @@ function accessoryMats() {
     gold: toon({ color: 0xf2c230 }),
     black: toon({ color: 0x141416 }),
     lens: toon({ color: 0x101418 }),
+    grip: toon({ color: 0x4a3426 }),
   };
   return sharedMats;
 }
@@ -134,6 +139,10 @@ export class Pedestrian {
     this.runBlend = 0; // 0 walking .. 1 running (smoothed)
     this.groundY = 0;
     this.justKnocked = false; // set on knockdown; observers (e.g. NpcManager) clear it
+    this.health = new Health(100);
+    this.hurtFrom = null; // Vector2 position of whoever last hurt us (non-fatally); observers clear it
+    this.weapon = null; // weapon definition being held (visual + aim pose), or null
+    this.recoil = 0; // 0..1 kick of the gun arm, decays
     this.mesh = this.#buildMesh();
     this.setLook(look);
   }
@@ -207,7 +216,17 @@ export class Pedestrian {
   }
 
   get isDown() {
-    return this.downTime > 0;
+    return this.downTime > 0 || this.dead;
+  }
+
+  get dead() {
+    return this.health.dead;
+  }
+
+  /** Show (or put away) a gun. `def` is a weapon definition from combat/weapons.js, or null. */
+  setWeapon(def) {
+    this.weapon = def;
+    this.acc.gun.visible = def !== null;
   }
 
   reset(x, z, heading = 0) {
@@ -215,16 +234,26 @@ export class Pedestrian {
     this.velocity.set(0, 0);
     this.heading = heading;
     this.downTime = 0;
+    this.fall = this.dead ? 1 : 0;
+  }
+
+  /** Back on your feet at full health. */
+  revive() {
+    this.health.reset();
+    this.downTime = 0;
     this.fall = 0;
+    this.hurtFrom = null;
   }
 
   /**
    * Fixed-step update. `move` is a desired direction (Vector2, length 0..1) in world space;
-   * `run` sprints. Ignored while knocked down.
+   * `run` sprints. Ignored while knocked down. `face` (radians), if given, overrides which way
+   * we turn (e.g. toward an aim point) so we can strafe and backpedal.
    */
-  update(dt, move, run, world) {
-    if (this.downTime > 0) {
-      this.downTime -= dt;
+  update(dt, move, run, world, face = null) {
+    this.recoil = Math.max(0, this.recoil - dt * 8);
+    if (this.isDown) {
+      this.downTime = Math.max(0, this.downTime - dt);
       this.velocity.multiplyScalar(Math.exp(-3 * dt));
     } else {
       const max = run ? RUN_SPEED : WALK_SPEED;
@@ -234,12 +263,12 @@ export class Pedestrian {
       const step = Math.min(len, ACCEL * dt);
       if (len > 1e-5) this.velocity.x += (tx / len) * step, this.velocity.y += (tz / len) * step;
 
-      if (move.x * move.x + move.y * move.y > 0.01) {
-        // Turn smoothly toward the movement direction.
-        const target = Math.atan2(move.x, move.y);
+      if (face !== null || move.x * move.x + move.y * move.y > 0.01) {
+        // Turn smoothly toward the movement direction (or the aim direction, snappier).
+        const target = face ?? Math.atan2(move.x, move.y);
         let diff = target - this.heading;
         diff = Math.atan2(Math.sin(diff), Math.cos(diff));
-        this.heading += diff * Math.min(1, 14 * dt);
+        this.heading += diff * Math.min(1, (face !== null ? 25 : 14) * dt);
       }
     }
 
@@ -256,9 +285,31 @@ export class Pedestrian {
   /** Thrown by an impact (e.g. hit by a car). */
   knockDown(impulse) {
     this.velocity.copy(impulse);
+    if (this.dead) return; // bodies just get shoved about
     this.downTime = 2.2;
     this.justKnocked = true;
     if (impulse.lengthSq() > 0.01) this.heading = Math.atan2(-impulse.x, -impulse.y); // fall backwards
+  }
+
+  /**
+   * Take damage. `impulse` (Vector2, m/s) shoves us; `from` (Vector2) is where it came from.
+   * A fatal hit drops us for good. Returns true if this hit killed.
+   */
+  hurt(amount, impulse = null, from = null, source = null) {
+    if (this.dead) return false;
+    const killed = this.health.damage(amount, source);
+    if (killed) {
+      this.downTime = 0;
+      this.justKnocked = true; // bystanders scatter just as for a knockdown
+      if (impulse) {
+        this.velocity.copy(impulse);
+        if (impulse.lengthSq() > 0.01) this.heading = Math.atan2(-impulse.x, -impulse.y); // fall backwards
+      }
+    } else {
+      if (impulse) this.velocity.add(impulse);
+      if (from) this.hurtFrom = from.clone();
+    }
+    return killed;
   }
 
   #collideStatic(world) {
@@ -301,6 +352,11 @@ export class Pedestrian {
     // Arms swing opposite to the legs: left arm goes back as the left leg comes forward.
     this.#posArm(this.armL, this.elbowL, p, s, r, 1);
     this.#posArm(this.armR, this.elbowR, p + Math.PI, s, r, -1);
+    if (this.weapon && !this.isDown) {
+      // Gun arm held straight out in front, kicking up a little with each shot.
+      this.armR.rotation.set(-Math.PI / 2 - this.recoil * 0.45, 0, 0.12);
+      this.elbowR.rotation.x = -this.recoil * 0.3;
+    }
 
     const c2 = Math.cos(2 * p);
     // Walk: highest over the planted foot, lowest in double support.
@@ -410,8 +466,9 @@ export class Pedestrian {
       const elbow = new THREE.Group();
       elbow.position.y = -UPPER_ARM;
       shoulder.add(part(G.upperArm, m.sleeve), stripe(G.armStripe, out * 0.08, -UPPER_ARM / 2), elbow);
-      elbow.add(part(G.forearm, m.sleeve), part(G.hand, m.skin, 0, -FOREARM - 0.03, 0));
-      return [shoulder, elbow];
+      const hand = part(G.hand, m.skin, 0, -FOREARM - 0.03, 0);
+      elbow.add(part(G.forearm, m.sleeve), hand);
+      return [shoulder, elbow, hand];
     };
     [this.legL, this.kneeL, this.footL] = leg(0.13);
     [this.legR, this.kneeR, this.footR] = leg(-0.13);
@@ -429,8 +486,13 @@ export class Pedestrian {
     const nose = part(G.nose, m.skin, 0, 0.6, 0.24); // shows which way they face
     torso.add(part(G.chest, m.shirt), part(G.hips, m.pants), part(G.neck, m.skin, 0, 0.42, 0), head, hairMesh, nose);
     [this.armL, this.elbowL] = arm(0.325);
-    [this.armR, this.elbowR] = arm(-0.325);
+    let handR;
+    [this.armR, this.elbowR, handR] = arm(-0.325);
     torso.add(this.armL, this.armR);
+    acc.gun = new THREE.Group();
+    acc.gun.add(part(G.gunSlide, S.black), part(G.gunGrip, S.grip));
+    acc.gun.visible = false;
+    handR.add(acc.gun);
 
     // --- Clothing ---
     acc.placket = part(G.placket, m.inner, 0, 0.07, 0.155);

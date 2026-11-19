@@ -14,6 +14,12 @@ export const CRIMES = {
   hitPerson: 60, // knocking someone down with a car
   hitCop: 220,
   ramPolice: 45,
+  gunfire: 25, // shooting where the police can see or hear it
+  shootPerson: 40, // somebody always sees that
+  killPerson: 70,
+  shootCop: 160,
+  killCop: 260,
+  shootPoliceCar: 30,
 };
 
 export class Wanted {

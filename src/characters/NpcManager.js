@@ -10,6 +10,9 @@ const STAND = new THREE.Vector2();
 const SCARE_RADIUS = 14; // people this close to someone getting run over panic
 const CROSS_GREEN_NEEDED = 4; // seconds of green left needed to start crossing
 const ARRIVE = 0.5;
+const BODY_TIME = 25; // seconds a body stays on the street before it's cleared away
+/** Hit points by role (a pistol does 34 a shot). */
+const HEALTH = { civilian: 60, gang: 100, cop: 100 };
 
 const _v = new THREE.Vector2();
 const _move = new THREE.Vector2();
@@ -74,6 +77,8 @@ export class NpcManager {
 
   /** Hand a busy NPC back to the ambient AI: they carry on walking the sidewalks. */
   release(n) {
+    n.ped.setWeapon(null);
+    n.weapon = null;
     n.busy = false;
     n.goal = null;
     n.unit = null;
@@ -87,22 +92,26 @@ export class NpcManager {
   step(dt, world, peds, cars, lights) {
     const npcs = this.active;
 
-    // Someone got knocked down: everyone nearby scatters.
+    // Someone got knocked down (or killed): everyone nearby scatters.
     for (const p of peds) {
       if (!p.justKnocked) continue;
       p.justKnocked = false;
-      for (const n of npcs) {
-        if (n.busy) continue;
-        _v.subVectors(n.ped.position, p.position);
-        const d = _v.length();
-        if (d > SCARE_RADIUS) continue;
-        if (d < 0.1) _v.set(this.rng.range(-1, 1), this.rng.range(-1, 1));
-        this.#flee(n, _v.normalize().rotateAround(STAND, this.rng.range(-0.6, 0.6)), this.rng.range(3, 6));
-      }
+      this.alarm(p.position, SCARE_RADIUS);
     }
 
     for (const n of npcs) {
       const p = n.ped;
+      if (p.dead) {
+        p.update(dt, STAND, false, world);
+        n.deadTime += dt;
+        if (n.deadTime > BODY_TIME) this.#release(n);
+        continue;
+      }
+      if (p.hurtFrom) {
+        // Shot (but still standing): run away from whoever did it. Busy cops keep coming.
+        if (!n.busy && n.role !== 'cop') this.#flee(n, _v.subVectors(p.position, p.hurtFrom).normalize(), this.rng.range(5, 8));
+        p.hurtFrom = null;
+      }
       if (p.isDown) {
         p.update(dt, STAND, false, world);
         if (!n.busy) n.state = 'recover';
@@ -174,6 +183,21 @@ export class NpcManager {
         }
       }
       n.stateTime += dt;
+    }
+  }
+
+  /**
+   * Something frightening happened at `pos` (a gunshot, someone run over): everyone within
+   * `radius` who isn't busy runs away from it. `except` is spared (e.g. the shooter).
+   */
+  alarm(pos, radius, { except = null, time = [3, 6], spareCops = false } = {}) {
+    for (const n of this.active) {
+      if (n.busy || n.ped.dead || n.ped === except || (spareCops && n.role === 'cop')) continue;
+      _v.subVectors(n.ped.position, pos);
+      const d = _v.length();
+      if (d > radius) continue;
+      if (d < 0.1) _v.set(this.rng.range(-1, 1), this.rng.range(-1, 1));
+      this.#flee(n, _v.normalize().rotateAround(STAND, this.rng.range(-0.6, 0.6)), this.rng.range(...time));
     }
   }
 
@@ -308,8 +332,13 @@ export class NpcManager {
     n.ped.setLook(person.look);
     n.ped.role = person.role;
     n.ped.gang = person.gang;
+    n.ped.health.reset(HEALTH[person.role] ?? 100);
+    n.ped.hurtFrom = null;
+    n.ped.setWeapon(null);
     Object.assign(n, {
       active: true,
+      deadTime: 0,
+      weapon: null, // a Weapon when this NPC has a gun out (cops at high wanted levels)
       busy: false,
       goal: null,
       unit: null,

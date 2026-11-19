@@ -4,6 +4,7 @@ import { CITY } from '../world/City.js';
 import { DIRS, HALF_ROAD, LANE_OFFSET, headingOf, isValidNode, nodeX, rightOf } from '../traffic/RoadNetwork.js';
 import { PursuitDriver } from './PursuitDriver.js';
 import { clearLine } from './sight.js';
+import { WEAPONS, Weapon } from '../combat/weapons.js';
 
 /** Patrol cars hunting the player at each wanted level. */
 const UNITS_BY_STARS = [0, 1, 2, 3, 5, 7];
@@ -19,6 +20,12 @@ const DISPATCH_EVERY = 5; // seconds between radio updates of the player's posit
 const SPAWN_MIN = 65; // just outside the camera's view
 const SPAWN_MAX = 115;
 const DESPAWN = 240;
+const SHOOT_AT_STARS = 3; // officers on foot draw their pistols at this wanted level
+const SHOOT_RANGE = 24;
+const SHOOT_MIN = 3.5; // closer than this they go for the arrest instead
+const SHOT_GAP = [1.1, 2.0]; // seconds between an officer's shots
+const COP_SPREAD = 4; // multiplier on the pistol's spread: running and gunning isn't accurate
+const COP_DAMAGE = 0.6; // fraction of the pistol's damage (keeps fights survivable)
 
 /**
  * Police response to the wanted level: spawns patrol cars that chase the player (and pulls in
@@ -35,6 +42,7 @@ export class PoliceSystem {
     this.pool = [];
     this.bustTime = 0;
     this.busted = false;
+    this.combat = null; // CombatSystem, once it exists (lets officers shoot)
   }
 
   /** Active patrol cars (for physics, traffic AI and collisions). */
@@ -114,7 +122,7 @@ export class PoliceSystem {
     const target = player.body;
     const tp = target.position;
     const playerSlow = !player.inVehicle || target.speed < 3;
-    const hunting = wanted.stars > 0 && !this.busted;
+    const hunting = wanted.stars > 0 && !this.busted && !(!player.inVehicle && player.ped.dead);
 
     for (const u of this.units) {
       const car = u.car;
@@ -157,7 +165,7 @@ export class PoliceSystem {
       } else if (u.state === 'deployed') {
         controls = { throttle: 0, steer: 0, handbrake: true };
         const o = u.officer;
-        if (!o?.active || o.unit !== u) {
+        if (!o?.active || o.unit !== u || o.ped.dead) {
           // Officer lost track of (despawned far away): the car carries on alone.
           u.officer = null;
           u.state = 'chase';
@@ -210,6 +218,7 @@ export class PoliceSystem {
       }
       if (!ownUnit?.returning) n.goal = tp;
       if (p.isDown || n.goal !== tp) continue;
+      this.#shootAt(n, d, dt, { player, wanted, world });
 
       // Arrest: right next to someone on foot, or at the door of a car that's stopped.
       if (player.inVehicle) {
@@ -220,6 +229,28 @@ export class PoliceSystem {
     }
     this.bustTime = arresting ? this.bustTime + dt : Math.max(0, this.bustTime - dt * 2);
     if (this.bustTime > BUST_TIME && hunting) this.busted = true;
+  }
+
+  /** An officer chasing on foot opens fire at a dangerous suspect who's also on foot. */
+  #shootAt(n, d, dt, { player, wanted, world }) {
+    const p = n.ped;
+    const tp = player.ped.position;
+    const draw = this.combat && wanted.stars >= SHOOT_AT_STARS && !player.inVehicle;
+    if (!draw) {
+      if (n.weapon) (n.weapon = null), p.setWeapon(null);
+      return;
+    }
+    if (!n.weapon) {
+      n.weapon = new Weapon(WEAPONS.pistol, { reserve: Infinity });
+      n.shotWait = this.rng.range(...SHOT_GAP); // draw, then a moment to aim
+      p.setWeapon(n.weapon.def);
+    }
+    n.weapon.update(dt);
+    n.shotWait -= dt;
+    if (n.shotWait > 0 || d < SHOOT_MIN || d > SHOOT_RANGE) return;
+    if (!clearLine(world, p.position.x, p.position.y, tp.x, tp.y)) return;
+    p.heading = Math.atan2(tp.x - p.position.x, tp.y - p.position.y); // square up to the target
+    if (this.combat.fire(p, n.weapon, tp, { spreadMul: COP_SPREAD, damageMul: COP_DAMAGE })) n.shotWait = this.rng.range(...SHOT_GAP);
   }
 
   /** Per-frame bookkeeping: bring in or retire patrol cars to match the wanted level. */

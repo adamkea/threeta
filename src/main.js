@@ -17,6 +17,7 @@ import { SkidMarks } from './effects/SkidMarks.js';
 import { Wanted } from './police/Wanted.js';
 import { PoliceSystem } from './police/PoliceSystem.js';
 import { CityMap } from './ui/CityMap.js';
+import { CombatSystem } from './combat/CombatSystem.js';
 import { ParkedCars } from './vehicles/ParkedCars.js';
 
 const canvas = document.getElementById('game');
@@ -97,12 +98,29 @@ const onCarHit = (a, b, impulse) => {
 
 const allCars = () => player.freeCars.concat(traffic.cars, police.cars);
 const allPeds = () => (player.ped.active ? [player.ped] : []).concat(npcs.peds);
+
+// --- Guns ---
+const combat = new CombatSystem(scene, { world, peds: allPeds, cars: allCars, npcs });
+player.combat = combat;
+police.combat = combat;
+const GUN_HEARING = 45; // police this close (with a clear line) notice gunfire
+combat.onShot = ({ shooter, origin }) => {
+  if (shooter === player.ped && police.witnesses(origin, world, GUN_HEARING)) wanted.report('gunfire');
+};
+combat.onHit = ({ shooter, target, kind, killed }) => {
+  if (shooter !== player.ped) return;
+  if (kind === 'ped') {
+    const cop = target.role === 'cop';
+    wanted.report(cop ? 'shootCop' : 'shootPerson');
+    if (killed) wanted.report(cop ? 'killCop' : 'killPerson');
+  } else if (kind === 'car' && isPoliceCar(target)) wanted.report('shootPoliceCar');
+};
 traffic.populate({ x: SPAWN.x, z: SPAWN.z }, allCars());
 npcs.populate({ x: SPAWN.x, z: SPAWN.z });
 const parked = new ParkedCars(scene, rng, city.parkingSpots, () => player.freeCars);
 parked.populate({ x: SPAWN.x, z: SPAWN.z }, allCars(), disposeObject);
 // Drivers only need to watch for people who are actually in the road.
-const onRoad = (p) => groundHeight(p.position.x, p.position.y) === 0;
+const onRoad = (p) => !p.dead && groundHeight(p.position.x, p.position.y) === 0;
 
 // --- Camera, input, HUD ---
 const input = new Input();
@@ -115,6 +133,24 @@ const wantedEl = document.getElementById('wanted');
 const starEls = [...wantedEl.querySelectorAll('i')];
 const bannerEl = document.getElementById('banner');
 const cityMap = new CityMap(city, document.getElementById('map'));
+const healthEl = document.getElementById('health');
+const hurtEl = document.getElementById('hurt');
+const weaponEl = document.getElementById('weapon');
+const weaponNameEl = weaponEl.querySelector('.name');
+const weaponAmmoEl = weaponEl.querySelector('.ammo');
+let lastHp = playerPed.health.hp;
+let hurtFlash = 0;
+
+// Mouse aim: the ground point under the cursor, at roughly gun height.
+const raycaster = new THREE.Raycaster();
+const aimPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -1.9);
+const _ndc = new THREE.Vector2();
+const _aimHit = new THREE.Vector3();
+function updateAim() {
+  _ndc.set((input.mouse.x / window.innerWidth) * 2 - 1, -(input.mouse.y / window.innerHeight) * 2 + 1);
+  raycaster.setFromCamera(_ndc, camera);
+  if (raycaster.ray.intersectPlane(aimPlane, _aimHit)) player.aim.set(_aimHit.x, _aimHit.z);
+}
 
 function resize() {
   const w = window.innerWidth;
@@ -136,9 +172,9 @@ function resetPlayer() {
   }
 }
 
-// While being arrested the player has no control.
-const NO_INPUT = { throttle: 0, steer: 0, move: { x: 0, y: 0 }, isDown: () => false };
-let bustedTimer = 0;
+// While being arrested (or dead) the player has no control.
+const NO_INPUT = { throttle: 0, steer: 0, move: { x: 0, y: 0 }, isDown: () => false, wasPressed: () => false };
+let bustedTimer = 0; // > 0 while the BUSTED / FLATLINED sequence plays
 let bannerTimer = 0;
 const policeCtx = { player, wanted, world };
 
@@ -163,9 +199,10 @@ function showBanner(text, kind, time = 2.5) {
   bannerTimer = time;
 }
 
-/** Arrested: hand over the car, get released back at the start, slate wiped clean. */
+/** Arrested or killed: lose the car, start again back at the start with full health and a clean slate. */
 function finishArrest() {
   player.forceExit(world);
+  player.ped.revive();
   player.ped.reset(SPAWN.x - 9, SPAWN.z);
   wanted.clear();
   police.standDown();
@@ -173,7 +210,10 @@ function finishArrest() {
 
 function updateWanted(dt) {
   const hadStars = wanted.stars;
-  if (police.busted && bustedTimer === 0) {
+  if (bustedTimer === 0 && !player.inVehicle && player.ped.dead) {
+    bustedTimer = 4;
+    showBanner('FLATLINED', 'dead', 4);
+  } else if (police.busted && bustedTimer === 0) {
     bustedTimer = 3;
     showBanner('BUSTED', 'busted', 3);
   }
@@ -194,9 +234,28 @@ function updateWanted(dt) {
   if (bannerTimer <= 0) bannerEl.className = '';
 }
 
+function updateCombatHud(dt) {
+  const hp = player.ped.health;
+  healthEl.style.setProperty('--hp', hp.fraction);
+  healthEl.classList.toggle('low', hp.fraction < 0.3);
+  if (hp.hp < lastHp) hurtFlash = 1;
+  lastHp = hp.hp;
+  hurtFlash = Math.max(0, hurtFlash - dt * 2.5);
+  hurtEl.style.opacity = hurtFlash * 0.8;
+
+  const w = player.weapon;
+  weaponEl.style.visibility = player.inVehicle ? 'hidden' : 'visible';
+  weaponEl.classList.toggle('holstered', !w);
+  weaponEl.classList.toggle('reloading', w?.reloadProgress != null);
+  weaponEl.style.setProperty('--reload', w?.reloadProgress ?? 0);
+  weaponNameEl.textContent = w ? w.def.name : 'Unarmed';
+  weaponAmmoEl.innerHTML = w ? `${w.mag}<small>/${w.reserve}</small>` : '<small>Q — draw</small>';
+  canvas.style.cursor = player.armed && bustedTimer === 0 ? 'crosshair' : '';
+}
+
 // Dev-only hook for debugging / automated tests.
 if (import.meta.env.DEV) {
-  window.__game = { parked, skids, player, traffic, npcs, lights, world, allCars, allPeds, step, input, wanted, police, STEP: 1 / 120 };
+  window.__game = { parked, skids, player, traffic, npcs, lights, world, allCars, allPeds, step, input, wanted, police, combat, STEP: 1 / 120 };
 }
 
 // --- Main loop: fixed-step physics, variable-rate rendering ---
@@ -211,7 +270,10 @@ function frame(now) {
   if (bustedTimer === 0) {
     if (input.wasPressed('reset')) resetPlayer();
     if (input.wasPressed('use')) player.use(allCars(), world);
+    if (input.wasPressed('weapon') && !player.inVehicle) player.cycleWeapon();
+    if (input.wasPressed('fire')) player.pullTrigger();
   }
+  updateAim();
   if (input.wasPressed('map')) cityMap.toggle();
 
   acc += dt;
@@ -228,6 +290,7 @@ function frame(now) {
     player.ped.groundY = groundHeight(player.ped.position.x, player.ped.position.y);
     player.ped.syncMesh(dt);
   }
+  combat.update(dt);
   traffic.manage(rig.focus, allCars());
   updateWanted(dt);
   police.manage(policeCtx, allCars());
@@ -245,6 +308,7 @@ function frame(now) {
   const canEnter = player.findEnterableCar(allCars());
   const occupied = traffic.drivers.has(canEnter) || police.owns(canEnter);
   promptEl.textContent = player.inVehicle || bustedTimer > 0 ? '' : canEnter ? (occupied ? 'F — hijack car' : 'F — get in') : '';
+  updateCombatHud(dt);
 
   ink.render(scene, camera);
   cityMap.render(dt, {

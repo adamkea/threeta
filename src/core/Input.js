@@ -1,4 +1,4 @@
-// Keyboard state tracker. Exposes normalized axes so game code doesn't care about key bindings.
+// Keyboard + mouse state tracker (mouse buttons show up as 'Mouse0', 'Mouse1'… codes). Exposes normalized axes so game code doesn't care about key bindings.
 const BINDINGS = {
   up: ['KeyW', 'ArrowUp'],
   down: ['KeyS', 'ArrowDown'],
@@ -9,6 +9,9 @@ const BINDINGS = {
   use: ['KeyF', 'Enter'], // enter / exit vehicles
   sprint: ['ShiftLeft', 'ShiftRight'],
   map: ['KeyM'],
+  fire: ['Mouse0', 'ControlLeft', 'ControlRight'],
+  weapon: ['KeyQ'], // draw / holster / cycle weapons
+  reload: ['KeyE'],
 };
 
 export class Input {
@@ -22,6 +25,20 @@ export class Input {
     });
     target.addEventListener('keyup', (e) => this.keys.delete(e.code));
     window.addEventListener('blur', () => this.keys.clear());
+    /** Pointer position in CSS pixels (client coordinates), for aiming. */
+    this.mouse = { x: window.innerWidth / 2, y: window.innerHeight / 2, moved: false };
+    target.addEventListener('mousemove', (e) => {
+      this.mouse.x = e.clientX;
+      this.mouse.y = e.clientY;
+      this.mouse.moved = true;
+    });
+    target.addEventListener('mousedown', (e) => {
+      const code = `Mouse${e.button}`;
+      if (!this.keys.has(code)) this.pressedThisFrame.add(code);
+      this.keys.add(code);
+    });
+    target.addEventListener('mouseup', (e) => this.keys.delete(`Mouse${e.button}`));
+    target.addEventListener('contextmenu', (e) => e.preventDefault());
   }
 
   isDown(action) {

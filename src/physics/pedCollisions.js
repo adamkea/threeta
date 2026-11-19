@@ -1,4 +1,5 @@
 const KNOCKDOWN_SPEED = 5; // m/s closing speed at which a car knocks a person over
+const HIT_DAMAGE = 5.5; // hit points per m/s of closing speed above the knockdown threshold (+ a base 10)
 
 /**
  * Pushes pedestrians out of cars; fast impacts knock them down. Cars barely notice.
@@ -29,6 +30,8 @@ export function resolvePedCarCollisions(peds, cars, onKnockdown = null) {
           impulse.x += nx * closing * 0.5;
           impulse.y += nz * closing * 0.5;
           p.knockDown(impulse);
+          // Getting hit hurts: a fast car (~70 km/h+) is usually fatal.
+          p.hurt(10 + (closing - KNOCKDOWN_SPEED) * HIT_DAMAGE, null, null, car);
           onKnockdown?.(p, car);
           car.velocity.multiplyScalar(0.94);
         } else {
@@ -48,7 +51,7 @@ export function resolvePedPedCollisions(peds) {
     if (!p.active) continue;
     for (let b = a + 1; b < peds.length; b++) {
       const q = peds[b];
-      if (!q.active) continue;
+      if (!q.active || q.dead || p.dead) continue; // walk over bodies rather than shoving them
       let nx = q.position.x - p.position.x;
       let nz = q.position.y - p.position.y;
       const r = p.radius + q.radius;
