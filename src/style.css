@@ -111,6 +111,13 @@ html, body {
   background: radial-gradient(ellipse at center, transparent 55%, rgba(200,20,28,.85) 100%);
 }
 
+/* Build version, bottom left. */
+#version {
+  position: absolute; left: 12px; bottom: 10px;
+  font-size: 12px; font-weight: 700; color: #fff; opacity: .6;
+  -webkit-text-stroke: 1px #14110f; paint-order: stroke fill;
+}
+
 /* Weapon + ammo, bottom right (the speedo's spot, which is hidden on foot). */
 #weapon {
   position: absolute; right: 24px; bottom: 20px; text-align: right;

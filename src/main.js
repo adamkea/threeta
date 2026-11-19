@@ -18,6 +18,7 @@ import { Wanted } from './police/Wanted.js';
 import { PoliceSystem } from './police/PoliceSystem.js';
 import { CityMap } from './ui/CityMap.js';
 import { weaponIcon } from './ui/weaponIcons.js';
+import { version } from '../package.json';
 import { CombatSystem } from './combat/CombatSystem.js';
 import { ParkedCars } from './vehicles/ParkedCars.js';
 
@@ -136,6 +137,7 @@ const bannerEl = document.getElementById('banner');
 const cityMap = new CityMap(city, document.getElementById('map'));
 const healthEl = document.getElementById('health');
 const hurtEl = document.getElementById('hurt');
+document.getElementById('version').textContent = `v${version}`;
 const weaponEl = document.getElementById('weapon');
 const weaponNameEl = weaponEl.querySelector('.name');
 const weaponAmmoEl = weaponEl.querySelector('.ammo');
