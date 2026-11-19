@@ -142,7 +142,7 @@ export class PlayerController {
   step(dt, input, world) {
     for (const c of this.freeCars) {
       if (c === this.vehicle) {
-        c.update(dt, { throttle: input.throttle, steer: input.steer, handbrake: input.isDown('handbrake') }, world);
+        c.update(dt, input.driveControls(c), world);
       } else {
         c.update(dt, PARKED, world);
       }
@@ -158,6 +158,8 @@ export class PlayerController {
     // ready is remembered briefly, so fast tapping isn't lost); automatics fire while held.
     const trigger = input.isDown('fire');
     if (trigger && !this.triggerHeld) this.shotBuffer = 0.2;
+    // The touch aim stick holds the trigger: semi-automatics keep firing as fast as they cycle.
+    if (trigger && input.aimStick.active) this.shotBuffer = 0.2;
     this.triggerHeld = trigger;
     this.shotBuffer = Math.max(0, this.shotBuffer - dt);
     if (armed && (this.shotBuffer > 0 || (trigger && this.weapon.def.auto))) {
