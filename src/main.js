@@ -17,6 +17,7 @@ import { SkidMarks } from './effects/SkidMarks.js';
 import { Wanted } from './police/Wanted.js';
 import { PoliceSystem } from './police/PoliceSystem.js';
 import { CityMap } from './ui/CityMap.js';
+import { weaponIcon } from './ui/weaponIcons.js';
 import { CombatSystem } from './combat/CombatSystem.js';
 import { ParkedCars } from './vehicles/ParkedCars.js';
 
@@ -138,6 +139,8 @@ const hurtEl = document.getElementById('hurt');
 const weaponEl = document.getElementById('weapon');
 const weaponNameEl = weaponEl.querySelector('.name');
 const weaponAmmoEl = weaponEl.querySelector('.ammo');
+const weaponIconEl = weaponEl.querySelector('.icon');
+let shownIconDef;
 let lastHp = playerPed.health.hp;
 let hurtFlash = 0;
 
@@ -248,7 +251,13 @@ function updateCombatHud(dt) {
   weaponEl.classList.toggle('holstered', !w);
   weaponEl.classList.toggle('reloading', w?.reloadProgress != null);
   weaponEl.style.setProperty('--reload', w?.reloadProgress ?? 0);
+  weaponEl.classList.toggle('empty', !!w && w.mag === 0 && w.reserve === 0);
   weaponNameEl.textContent = w ? w.def.name : 'Unarmed';
+  const iconDef = w?.def ?? null;
+  if (iconDef !== shownIconDef) {
+    weaponIconEl.innerHTML = weaponIcon(iconDef);
+    shownIconDef = iconDef;
+  }
   weaponAmmoEl.innerHTML = w ? `${w.mag}<small>/${w.reserve}</small>` : '<small>Q — draw</small>';
   canvas.style.cursor = player.armed && bustedTimer === 0 ? 'crosshair' : '';
 }

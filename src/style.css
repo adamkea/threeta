@@ -119,6 +119,11 @@ html, body {
   text-shadow: 3px 3px 0 #14110f;
 }
 #weapon .name { display: block; font-size: 18px; color: #fff; letter-spacing: .5px; text-transform: uppercase; }
+#weapon .row { display: flex; align-items: center; justify-content: flex-end; gap: 10px; }
+#weapon .icon { display: block; width: 72px; height: 36px; color: #ffd23a; filter: drop-shadow(3px 3px 0 #14110f); }
+#weapon .icon svg { display: block; width: 100%; height: 100%; overflow: visible; }
+#weapon.holstered .icon { color: #fff; opacity: .7; }
+#weapon.empty .icon, #weapon.empty .ammo { color: #ff5a4a; }
 #weapon .ammo { display: block; font-size: 44px; color: #ffd23a; line-height: 1; }
 #weapon .ammo small { font-size: 18px; margin-left: 4px; opacity: .85; }
 #weapon.holstered .name { opacity: .7; }
