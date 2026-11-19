@@ -13,6 +13,7 @@ import { NpcManager, disposeObject } from './characters/NpcManager.js';
 import { PlayerController } from './player/PlayerController.js';
 import { createRng } from './core/random.js';
 import { InkRenderer } from './render/InkRenderer.js';
+import { SkidMarks } from './effects/SkidMarks.js';
 
 const canvas = document.getElementById('game');
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
@@ -60,6 +61,7 @@ const lights = new TrafficLights(rng);
 scene.add(lights.mesh);
 const traffic = new TrafficSystem(scene, rng, lights);
 const npcs = new NpcManager(scene, rng);
+const skids = new SkidMarks(scene, groundHeight);
 
 const playerPed = new Pedestrian({ shirt: 0xf5f5f5, pants: 0x23262e });
 scene.add(playerPed.mesh);
@@ -115,7 +117,7 @@ function step(dt) {
 
 // Dev-only hook for debugging / automated tests.
 if (import.meta.env.DEV) {
-  window.__game = { player, traffic, npcs, lights, world, allCars, allPeds, step, input, STEP: 1 / 120 };
+  window.__game = { skids, player, traffic, npcs, lights, world, allCars, allPeds, step, input, STEP: 1 / 120 };
 }
 
 // --- Main loop: fixed-step physics, variable-rate rendering ---
@@ -139,6 +141,7 @@ function frame(now) {
   // --- Per-frame bookkeeping & visuals ---
   lights.update(dt);
   for (const c of allCars()) if (c.active) c.syncMesh();
+  skids.update(dt, allCars());
   if (player.ped.active) {
     player.ped.groundY = groundHeight(player.ped.position.x, player.ped.position.y);
     player.ped.syncMesh(dt);

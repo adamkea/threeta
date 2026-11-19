@@ -116,6 +116,8 @@ export class Car {
     this.heading = 0;
     this.steer = 0; // smoothed -1..1
     this.braking = false;
+    this.slip = 0;
+    this.handbrake = false;
     this.id = nextId++;
     this.active = true; // inactive cars are pooled and skipped by physics/AI
     this.yawRate = 0; // extra spin from impacts (rad/s)
@@ -191,6 +193,9 @@ export class Car {
 
     let vF = this.velocity.dot(fwd);
     let vR = this.velocity.dot(right);
+    // Read by effects (skid marks): sideways slide speed and whether the handbrake is on.
+    this.slip = Math.abs(vR);
+    this.handbrake = !!controls.handbrake;
 
     // --- Throttle / brake / reverse ---
     this.braking = false;
