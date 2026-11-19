@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { toon } from '../render/toon.js';
 
 // Tunable handling parameters (SI-ish units: metres, seconds).
 let nextId = 1;
@@ -27,7 +28,7 @@ const DEFAULTS = {
  * Heading 0 faces +Z. Forward vector = (sin h, cos h).
  */
 export class Car {
-  constructor({ color = 0xd23b2f, ...opts } = {}) {
+  constructor({ color = 0xd23b2f, stripes = null, ...opts } = {}) {
     this.cfg = { ...DEFAULTS, ...opts };
     this.position = new THREE.Vector2(0, 0); // x, z
     this.velocity = new THREE.Vector2(0, 0);
@@ -41,6 +42,7 @@ export class Car {
     this.bodyRoll = 0;
     this.bodyPitch = 0;
     this.mesh = this.#buildMesh(color);
+    this.setStripes(stripes);
   }
 
   get speed() {
@@ -65,6 +67,12 @@ export class Car {
 
   setColor(color) {
     this.paint.color.set(color);
+  }
+
+  /** Twin racing stripes over hood, roof and trunk; pass null to remove. */
+  setStripes(color) {
+    this.stripeGroup.visible = color != null;
+    if (color != null) this.stripeMat.color.set(color);
   }
 
   /** Turning ability (0..1) at a given forward speed: none when stopped, slightly less when fast. */
@@ -234,9 +242,10 @@ export class Car {
     this.body = body;
 
     const { length: L, width: W } = this.cfg;
-    const paint = (this.paint = new THREE.MeshLambertMaterial({ color }));
-    const dark = new THREE.MeshLambertMaterial({ color: 0x1c1f26 });
-    const glass = new THREE.MeshLambertMaterial({ color: 0x23344a });
+    const paint = (this.paint = toon({ color }));
+    const dark = toon({ color: 0x1c1f26 });
+    const glass = toon({ color: 0x1d2a3d });
+    const glint = new THREE.MeshBasicMaterial({ color: 0x9cc4e8 });
     const add = (geo, mat, x, y, z, parent = body) => {
       const m = new THREE.Mesh(geo, mat);
       m.position.set(x, y, z);
@@ -248,6 +257,17 @@ export class Car {
     add(new THREE.BoxGeometry(W, 0.6, L), paint, 0, 0.3, 0); // lower body
     add(new THREE.BoxGeometry(W * 0.86, 0.55, L * 0.5), glass, 0, 0.87, -0.2); // cabin glass
     add(new THREE.BoxGeometry(W * 0.8, 0.08, L * 0.42), paint, 0, 1.17, -0.25); // roof
+    // Windscreen highlight streak — reads as glass from the high camera.
+    add(new THREE.BoxGeometry(W * 0.5, 0.02, 0.12), glint, -0.15, 1.15, L * 0.02).rotation.y = 0.5;
+
+    this.stripeMat = toon({ color: 0xffffff });
+    this.stripeGroup = new THREE.Group();
+    body.add(this.stripeGroup);
+    for (const sx of [-0.24, 0.24]) {
+      add(new THREE.BoxGeometry(0.26, 0.02, L * 0.42), this.stripeMat, sx, 0.611, L * 0.29, this.stripeGroup); // hood
+      add(new THREE.BoxGeometry(0.26, 0.02, L * 0.42), this.stripeMat, sx, 1.221, -0.25, this.stripeGroup); // roof
+      add(new THREE.BoxGeometry(0.26, 0.02, L * 0.08), this.stripeMat, sx, 0.611, -L * 0.46, this.stripeGroup); // trunk
+    }
     add(new THREE.BoxGeometry(W * 1.02, 0.18, 0.25), dark, 0, 0.12, L / 2); // front bumper
     add(new THREE.BoxGeometry(W * 1.02, 0.18, 0.25), dark, 0, 0.12, -L / 2); // rear bumper
 
@@ -261,9 +281,9 @@ export class Car {
     // Wheels: pivot (steering) -> spin (rolling) -> tyre mesh
     this.wheels = [];
     const tyreGeo = new THREE.CylinderGeometry(0.4, 0.4, 0.32, 14).rotateZ(Math.PI / 2);
-    const tyreMat = new THREE.MeshLambertMaterial({ color: 0x15161a });
+    const tyreMat = toon({ color: 0x15161a });
     const hubGeo = new THREE.BoxGeometry(0.34, 0.18, 0.18);
-    const hubMat = new THREE.MeshLambertMaterial({ color: 0xb0b4bc });
+    const hubMat = toon({ color: 0xc8ccd4 });
     for (const [x, z, front] of [
       [W / 2 - 0.12, L * 0.32, true],
       [-W / 2 + 0.12, L * 0.32, true],

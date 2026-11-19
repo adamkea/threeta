@@ -15,6 +15,12 @@ Controls:
 - **F / Enter** get in or out of a car — works on traffic too (the driver gets thrown out and runs off)
 - **R** reset
 
+## Look
+
+Comic-book rendering in the spirit of Chinatown Wars: toon (banded) materials (`src/render/toon.js`)
+plus an ink pass (`src/render/InkRenderer.js`) that draws thick black outlines from depth and normal
+edges and boosts saturation. Roads have double-yellow centre lines, stop lines and zebra crossings.
+
 ## Layout
 
 - `src/main.js` – renderer, lighting, fixed-step game loop

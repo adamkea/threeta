@@ -3,7 +3,8 @@ import { CITY } from '../world/City.js';
 import { DIRS, HALF_ROAD, LANE_OFFSET, headingOf, isValidNode, nodeX, rightOf } from './RoadNetwork.js';
 import { TrafficDriver } from './TrafficDriver.js';
 
-const PAINTS = [0xf2f2f2, 0x2a2d34, 0x3a6ea5, 0xe0b23a, 0x6c8a4b, 0x8c2f39, 0xa9b2bd, 0x2f8f8a, 0xd9762b];
+// Bold, toy-like paint jobs (taxi yellow, cherry red, cop white, ...).
+const PAINTS = [0xf4f4f0, 0x24272e, 0x2f6fd0, 0xffc414, 0x4caa3c, 0xd62b2b, 0xb7c0ca, 0x18a6a0, 0xf27a1a, 0x8a3fc4];
 
 /**
  * Keeps a pool of AI cars alive around the player: spawns them on lanes just out of view,
@@ -92,6 +93,7 @@ export class TrafficSystem {
       if (others.some((o) => o !== car && o.active && Math.hypot(o.position.x - x, o.position.y - z) < 10)) continue;
 
       car.setColor(this.rng.pick(PAINTS));
+      car.setStripes(this.rng.chance(0.2) ? this.rng.pick([0xffffff, 0x111111]) : null);
       car.reset(x, z, headingOf(d), 9);
       car.active = true;
       car.mesh.visible = true;

@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { toon } from '../render/toon.js';
 
 const WALK_SPEED = 4.2;
 const RUN_SPEED = 8;
@@ -141,7 +142,7 @@ export class Pedestrian {
     const body = new THREE.Group(); // pivots at the feet for falling over
     root.add(body);
     this.body = body;
-    const mat = (c) => new THREE.MeshLambertMaterial({ color: c });
+    const mat = (c) => toon({ color: c });
     this.mats = { shirt: mat(shirt), pants: mat(pants), skin: mat(skin), hair: mat(hair) };
     const box = (w, h, d, m) => {
       const mesh = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), m);
@@ -167,12 +168,12 @@ export class Pedestrian {
     this.torso = torso;
     body.add(torso);
     const shirtMat = this.mats.shirt;
-    const chest = box(0.55, 0.65, 0.3, shirtMat);
+    const chest = box(0.62, 0.65, 0.36, shirtMat);
     chest.position.y = 0.05;
-    const head = box(0.3, 0.32, 0.3, this.mats.skin);
-    head.position.y = 0.58;
-    const hairMesh = box(0.32, 0.1, 0.32, this.mats.hair);
-    hairMesh.position.y = 0.76;
+    const head = box(0.42, 0.42, 0.42, this.mats.skin); // big comic head
+    head.position.y = 0.6;
+    const hairMesh = box(0.46, 0.14, 0.46, this.mats.hair);
+    hairMesh.position.y = 0.84;
     torso.add(chest, head, hairMesh);
     this.armL = limb(0.36, 0.33, 0.15, 0.6, shirtMat);
     this.armR = limb(-0.36, 0.33, 0.15, 0.6, shirtMat);

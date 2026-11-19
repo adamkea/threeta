@@ -12,12 +12,14 @@ import { Pedestrian } from './characters/Pedestrian.js';
 import { NpcManager, disposeObject } from './characters/NpcManager.js';
 import { PlayerController } from './player/PlayerController.js';
 import { createRng } from './core/random.js';
+import { InkRenderer } from './render/InkRenderer.js';
 
 const canvas = document.getElementById('game');
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 renderer.shadowMap.enabled = true;
-renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.shadowMap.type = THREE.PCFShadowMap; // crisp, graphic shadows
+const ink = new InkRenderer(renderer);
 
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x87b6d6);
@@ -26,8 +28,9 @@ scene.fog = new THREE.Fog(0x87b6d6, 160, 360);
 const camera = new THREE.PerspectiveCamera(30, 1, 5, 800);
 
 // --- Lighting ---
-scene.add(new THREE.HemisphereLight(0xdfeeff, 0x4a4438, 1.6));
-const sun = new THREE.DirectionalLight(0xfff2dd, 2.2);
+// Bright, flat fill plus a strong sun: toon materials band the sun into hard steps.
+scene.add(new THREE.HemisphereLight(0xeaf2ff, 0x5a5468, 1.5));
+const sun = new THREE.DirectionalLight(0xfff4e0, 2.0);
 sun.castShadow = true;
 sun.shadow.mapSize.set(2048, 2048);
 const sc = sun.shadow.camera;
@@ -36,6 +39,8 @@ sc.right = sc.top = 90;
 sc.near = 1;
 sc.far = 300;
 sun.shadow.bias = -0.0005;
+sun.shadow.normalBias = 0.05;
+sun.shadow.intensity = 0.75;
 scene.add(sun, sun.target);
 const sunOffset = new THREE.Vector3(-60, 110, 40);
 
@@ -45,7 +50,7 @@ scene.add(city.group);
 const world = new ColliderGrid(city.colliders);
 
 const SPAWN = { x: roadCenter(Math.floor(CITY.blocks / 2)) + 3.5, z: roadCenter(CITY.blocks / 2) + 20 };
-const playerCar = new Car({ color: 0xd23b2f });
+const playerCar = new Car({ color: 0xe0281e, stripes: 0xffffff });
 playerCar.reset(SPAWN.x, SPAWN.z, Math.PI);
 scene.add(playerCar.mesh);
 
@@ -79,6 +84,7 @@ function resize() {
   const w = window.innerWidth;
   const h = window.innerHeight;
   renderer.setSize(w, h, false);
+  ink.setSize(w, h);
   camera.aspect = w / h;
   camera.updateProjectionMatrix();
 }
@@ -151,7 +157,7 @@ function frame(now) {
   const canEnter = player.findEnterableCar(allCars());
   promptEl.textContent = player.inVehicle ? '' : canEnter ? (traffic.drivers.has(canEnter) ? 'F — hijack car' : 'F — get in') : '';
 
-  renderer.render(scene, camera);
+  ink.render(scene, camera);
   input.endFrame();
   requestAnimationFrame(frame);
 }
