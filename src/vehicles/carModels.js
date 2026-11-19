@@ -63,6 +63,7 @@ export const MODELS = {
     tail: 0.97,
     wheelR: 0.39,
     wheelZ: 0.31,
+    wheelInset: 0.27,
     paintBumpers: true,
     slimLamps: true,
     sideStrakes: true,
@@ -470,11 +471,12 @@ export function buildCarMesh(name, color) {
   // --- Wheels: pivot (steer) -> spin (roll) -> tyre, rim, hubcap, spoke ---
   const wheels = [];
   const wz = (m.wheelZ ?? 0.3) * L;
+  const wheelX = W / 2 - (m.wheelInset ?? 0.14); // larger inset tucks the tyres under the bodywork
   for (const [x, z, front] of [
-    [W / 2 - 0.14, wz, true],
-    [-W / 2 + 0.14, wz, true],
-    [W / 2 - 0.14, -wz, false],
-    [-W / 2 + 0.14, -wz, false],
+    [wheelX, wz, true],
+    [-wheelX, wz, true],
+    [wheelX, -wz, false],
+    [-wheelX, -wz, false],
   ]) {
     const pivot = new THREE.Group();
     pivot.position.set(x, R, z);
