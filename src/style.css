@@ -105,6 +105,24 @@ html, body {
 #health.low .bar { background: linear-gradient(#ff7a6a, #e0302a); animation: hp-pulse .6s ease-in-out infinite alternate; }
 @keyframes hp-pulse { to { opacity: .55; } }
 
+/* Vehicle condition: a slim bar above the speedometer while driving. */
+#car-health {
+  position: absolute; right: 24px; bottom: 92px; width: 170px;
+  font-size: 12px; font-weight: 900; font-style: italic; text-transform: uppercase; text-align: right;
+  -webkit-text-stroke: 1px #14110f; paint-order: stroke fill;
+}
+#car-health .track {
+  height: 10px; margin-top: 3px; background: #14110f; border: 2px solid #14110f; border-radius: 4px;
+  box-shadow: 3px 3px 0 #14110f; overflow: hidden;
+}
+#car-health .bar {
+  height: 100%; width: calc(100% * var(--hp, 1)); border-radius: 2px;
+  background: linear-gradient(#ffe36a, #e0a81a); transition: width .15s;
+}
+#car-health.bad .bar { background: linear-gradient(#ff9a4a, #e0602a); }
+#car-health.critical .bar { background: linear-gradient(#ff7a6a, #e0302a); animation: hp-pulse .3s ease-in-out infinite alternate; }
+#car-health.critical .state { color: #ff7a4a; }
+
 /* Red edge flash when the player gets hurt. */
 #hurt {
   position: absolute; inset: 0; opacity: 0;

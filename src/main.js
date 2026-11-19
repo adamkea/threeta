@@ -20,6 +20,7 @@ import { CityMap } from './ui/CityMap.js';
 import { weaponIcon } from './ui/weaponIcons.js';
 import { CombatSystem } from './combat/CombatSystem.js';
 import { ParkedCars } from './vehicles/ParkedCars.js';
+import { VehicleDamageSystem } from './vehicles/VehicleDamageSystem.js';
 
 const canvas = document.getElementById('game');
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
@@ -116,6 +117,37 @@ combat.onHit = ({ shooter, target, kind, killed }) => {
     if (killed) wanted.report(cop ? 'killCop' : 'killPerson');
   } else if (kind === 'car' && isPoliceCar(target)) wanted.report('shootPoliceCar');
 };
+
+// --- Vehicle damage: drivers bail out of burning cars, wrecks explode ---
+const damage = new VehicleDamageSystem(scene, { peds: allPeds });
+const byPlayer = (source) => source != null && (source === player.ped || source === player.vehicle);
+/** Whoever is driving a (non-player) car gets out on the driver's side and runs. */
+function bailOut(car) {
+  const side = car.right.multiplyScalar(-(car.cfg.width / 2 + 0.8));
+  const spot = car.position.clone().add(side);
+  if (traffic.drivers.has(car)) {
+    traffic.release(car);
+    player.freeCars.push(car);
+    npcs.spawnFleeing(spot.x, spot.y, car.position, car.position);
+  } else if (police.owns(car)) {
+    police.surrender(car, spot);
+    player.freeCars.push(car);
+  }
+}
+damage.onStateChange = (car, state) => {
+  if (state.bail && car !== player.vehicle) bailOut(car);
+  // Still at the wheel when it goes up: thrown out, right into the blast.
+  if (state.destroyed && car === player.vehicle) player.forceExit(world);
+};
+damage.onDestroyed = (car, source) => {
+  if (car.modelName === 'police' && byPlayer(source)) wanted.report('destroyPoliceCar');
+};
+damage.onBlastHit = (ped, killed, source) => {
+  if (ped === player.ped || !byPlayer(source)) return;
+  const cop = ped.role === 'cop';
+  wanted.report(killed ? (cop ? 'killCop' : 'killPerson') : cop ? 'shootCop' : 'shootPerson');
+};
+
 traffic.populate({ x: SPAWN.x, z: SPAWN.z }, allCars());
 npcs.populate({ x: SPAWN.x, z: SPAWN.z });
 const parked = new ParkedCars(scene, rng, city.parkingSpots, () => player.freeCars);
@@ -135,6 +167,8 @@ const starEls = [...wantedEl.querySelectorAll('i')];
 const bannerEl = document.getElementById('banner');
 const cityMap = new CityMap(city, document.getElementById('map'));
 const healthEl = document.getElementById('health');
+const carHealthEl = document.getElementById('car-health');
+const carStateEl = carHealthEl.querySelector('.state');
 const hurtEl = document.getElementById('hurt');
 const versionEl = document.getElementById('version');
 versionEl.textContent = `v${__GAME_VERSION__}`;
@@ -196,6 +230,7 @@ function step(dt) {
   resolveCarCollisions(active, 0.3, onCarHit);
   resolvePedCarCollisions(peds, active, onKnockdown);
   resolvePedPedCollisions(peds);
+  damage.step(dt, active);
   ramCooldown = Math.max(0, ramCooldown - dt);
 }
 
@@ -270,7 +305,7 @@ function updateCombatHud(dt) {
 
 // Dev-only hook for debugging / automated tests.
 if (import.meta.env.DEV) {
-  window.__game = { parked, skids, player, traffic, npcs, lights, world, allCars, allPeds, step, input, wanted, police, combat, STEP: 1 / 120 };
+  window.__game = { parked, skids, player, traffic, npcs, lights, world, allCars, allPeds, step, input, wanted, police, combat, damage, STEP: 1 / 120 };
 }
 
 // --- Main loop: fixed-step physics, variable-rate rendering ---
@@ -306,6 +341,7 @@ function frame(now) {
     player.ped.syncMesh(dt);
   }
   combat.update(dt);
+  damage.update(dt, allCars(), rig.focus);
   traffic.manage(rig.focus, allCars());
   updateWanted(dt);
   police.manage(policeCtx, allCars());
@@ -319,6 +355,14 @@ function frame(now) {
   sun.position.copy(rig.focus).add(sunOffset);
 
   speedBox.style.visibility = player.inVehicle ? 'visible' : 'hidden';
+  carHealthEl.style.visibility = player.inVehicle ? 'visible' : 'hidden';
+  if (player.inVehicle) {
+    const d = player.vehicle.damage;
+    carHealthEl.style.setProperty('--hp', d.fraction);
+    carStateEl.textContent = d.index ? d.state.name : '';
+    carHealthEl.classList.toggle('bad', d.fraction < 0.55);
+    carHealthEl.classList.toggle('critical', d.state.fire != null || d.fraction < 0.3);
+  }
   speedEl.textContent = Math.round(player.body.speed * 3.6);
   const canEnter = player.findEnterableCar(allCars());
   const occupied = traffic.drivers.has(canEnter) || police.owns(canEnter);

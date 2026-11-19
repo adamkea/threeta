@@ -86,9 +86,9 @@ export class CombatSystem {
     if (hit.kind === 'ped') {
       killed = hit.target.hurt(damage, dir.clone().multiplyScalar(def.knockback), shooter.position, shooter);
     } else if (hit.kind === 'car') {
-      // Cars don't have health yet; they just take a nudge. (`car.health` is honoured if added.)
+      // Bullets nudge the car and wear down its damage states (killed = this shot destroyed it).
       hit.target.velocity.addScaledVector(dir, 0.15);
-      killed = hit.target.health?.damage(damage, shooter) ?? false;
+      killed = hit.target.damage.hit(damage, shooter);
     }
     this.effects.impact(hit.point, hit.kind);
     this.onHit?.({ shooter, weapon, target: hit.target, kind: hit.kind, killed, point: hit.point });

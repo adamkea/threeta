@@ -9,6 +9,9 @@ import { toon } from '../render/toon.js';
  *   roofFront front edge of the roof
  *   front     where the windscreen meets the hood
  * `top` is the roof height above the body origin.
+ *
+ * Optional `damage` tunes how the model takes damage (hit points, engine position, or a custom
+ * list of damage states): see vehicles/damage.js. Models without one use the defaults.
  */
 const GENERAL = [0xf4f4f0, 0x24272e, 0x2f6fd0, 0x4caa3c, 0xd62b2b, 0xb7c0ca, 0x18a6a0, 0xf27a1a, 0x8a3fc4, 0x7a2430];
 
@@ -36,6 +39,7 @@ export const MODELS = {
     scoop: true,
     paints: [0xe0281e, 0xffc414, 0xf27a1a, 0x2f6fd0, 0x111216, 0xf4f4f0],
     stripeChance: 0.6,
+    damage: { hp: 600 }, // light and fragile
   },
   // Compact European hatchback: short overhangs, long flat roof ending in a roof spoiler over an
   // upright tailgate, thick C-pillars, and a slim black grille band joining the headlights.
@@ -60,6 +64,7 @@ export const MODELS = {
     nose: 0.9,
     tail: 0.98,
     paints: [0xf4f4f0, 0xb7c0ca, 0x2a4b7c, 0x6b4a32, 0x3f6b3a, 0xd9c79a],
+    damage: { hp: 950 },
   },
   pickup: {
     cfg: { length: 4.9, width: 2.1, maxSpeed: 31 },
@@ -70,6 +75,7 @@ export const MODELS = {
     nose: 0.88,
     tail: 0.96,
     paints: [0xb3261e, 0x2a4b7c, 0x3f6b3a, 0xc9a66b, 0x24272e, 0xf4f4f0],
+    damage: { hp: 900 },
   },
   taxi: {
     cfg: { length: 4.4, width: 2.0 },
@@ -85,6 +91,7 @@ export const MODELS = {
     lightbar: true,
     roofColor: 0xf4f4f0, // black-and-white livery
     paints: [0x17181c],
+    damage: { hp: 850 }, // reinforced for ramming
   },
 };
 
@@ -259,6 +266,15 @@ export function buildCarMesh(name, color) {
   const roofPaint = m.roofColor != null ? toon({ color: m.roofColor }) : paint;
   const stripeMat = toon({ color: 0xffffff });
   const tailMat = new THREE.MeshStandardMaterial({ color: 0x550000, emissive: 0xff1a1a, emissiveIntensity: 0.4 });
+  const headMat = S.head.clone(); // per car, so smashed headlights go dark on their own
+  headMat.userData = {};
+  // Parts that can be knocked off in a crash (see VehicleDamage.shedParts).
+  const loose = [];
+  const looseAdd = (...args) => {
+    const mesh = add(...args);
+    loose.push(mesh);
+    return mesh;
+  };
 
   const add = (geo, mat, x, y, z, parent = body, shadow = true) => {
     const mesh = new THREE.Mesh(geo, mat);
@@ -332,20 +348,20 @@ export function buildCarMesh(name, color) {
   }
 
   // Wing mirrors at the base of the A pillars.
-  for (const s of [-1, 1]) add(g.mirror, paint, s * (cabinW / 2 + 0.2), base + 0.12, pts[3][0] - 0.25);
+  for (const s of [-1, 1]) looseAdd(g.mirror, paint, s * (cabinW / 2 + 0.2), base + 0.12, pts[3][0] - 0.25);
 
   // --- Front & rear details ---
   const bumperY = 0.14;
-  add(g.bumper, S.dark, 0, bumperY, L / 2 - 0.05);
-  add(g.bumper, S.dark, 0, bumperY, -L / 2 + 0.05);
+  looseAdd(g.bumper, S.dark, 0, bumperY, L / 2 - 0.05);
+  looseAdd(g.bumper, S.dark, 0, bumperY, -L / 2 + 0.05);
   const lampY = T - 0.2;
   const lampX = W / 2 - 0.42;
   const frontFace = add(plane(lampX * 2 - 0.55, 0.16), S.grille, 0, lampY - 0.02, L / 2 + 0.01, body, false); // grille
   frontFace.renderOrder = 0;
-  add(plane(0.5, 0.12), S.plate, 0, bumperY + 0.02, L / 2 + 0.11, body, false); // number plates
-  add(plane(0.5, 0.12), S.plate, 0, bumperY + 0.02, -L / 2 - 0.11, body, false).rotation.y = Math.PI;
+  looseAdd(plane(0.5, 0.12), S.plate, 0, bumperY + 0.02, L / 2 + 0.11, body, false); // number plates
+  looseAdd(plane(0.5, 0.12), S.plate, 0, bumperY + 0.02, -L / 2 - 0.11, body, false).rotation.y = Math.PI;
   for (const s of [-1, 1]) {
-    add(g.lamp, S.head, s * lampX, lampY, L / 2 - 0.02);
+    add(g.lamp, headMat, s * lampX, lampY, L / 2 - 0.02);
     add(g.lamp, tailMat, s * lampX, lampY, -L / 2 + 0.02);
     add(new THREE.BoxGeometry(0.12, 0.08, 0.05), S.indicator, s * (W / 2 - 0.16), lampY, L / 2 - 0.12, body, false);
   }
@@ -368,10 +384,10 @@ export function buildCarMesh(name, color) {
   }
   if (m.spoiler) {
     for (const s of [-1, 1]) add(new THREE.BoxGeometry(0.08, 0.3, 0.12), S.dark, s * (W / 2 - 0.45), T + 0.14, -L / 2 + 0.3);
-    add(new RoundedBoxGeometry(W * 0.78, 0.07, 0.36, 2, 0.03), paint, 0, T + 0.31, -L / 2 + 0.3);
+    looseAdd(new RoundedBoxGeometry(W * 0.78, 0.07, 0.36, 2, 0.03), paint, 0, T + 0.31, -L / 2 + 0.3);
   }
   if (m.roofSpoiler) {
-    add(new RoundedBoxGeometry(cabinW + 0.04, 0.07, 0.34, 2, 0.03), roofPaint, 0, c.top + 0.09, c.roofRear * L - 0.08);
+    looseAdd(new RoundedBoxGeometry(cabinW + 0.04, 0.07, 0.34, 2, 0.03), roofPaint, 0, c.top + 0.09, c.roofRear * L - 0.08);
   }
   if (m.grilleBand) {
     // Slim black band running headlight to headlight, a chrome line through it and a round badge.
@@ -382,7 +398,7 @@ export function buildCarMesh(name, color) {
     add(plane(W * 0.55, 0.1), S.grille, 0, bumperY + 0.06, L / 2 + 0.1, body, false);
   }
   if (m.taxiSign) {
-    add(new RoundedBoxGeometry(0.85, 0.26, 0.32, 2, 0.06), S.sign, 0, c.top + 0.25, roofZ);
+    looseAdd(new RoundedBoxGeometry(0.85, 0.26, 0.32, 2, 0.06), S.sign, 0, c.top + 0.25, roofZ);
   }
   let siren = null;
   if (m.lightbar) {
@@ -419,8 +435,8 @@ export function buildCarMesh(name, color) {
     tyre.castShadow = true;
     spin.add(tyre, new THREE.Mesh(g.rim, S.rim), new THREE.Mesh(g.hubcap, S.chrome), new THREE.Mesh(g.spoke, S.rim));
     root.add(pivot);
-    wheels.push({ pivot, spin, front });
+    wheels.push({ pivot, spin, front, tyre });
   }
 
-  return { root, body, paint, roofPaint, stripeMat, stripeGroup, tailMat, wheels, siren };
+  return { root, body, paint, roofPaint, stripeMat, stripeGroup, tailMat, headMat, wheels, siren, loose };
 }
