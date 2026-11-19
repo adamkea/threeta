@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { FXAAShader } from 'three/examples/jsm/shaders/FXAAShader.js';
+import { SMAAPass } from 'three/examples/jsm/postprocessing/SMAAPass.js';
 
 /**
  * Two-pass "comic ink" renderer.
@@ -7,13 +7,13 @@ import { FXAAShader } from 'three/examples/jsm/shaders/FXAAShader.js';
  *  2. Normal pass  — the scene with view-space normals + a depth texture.
  *  3. Composite    — draws thick black lines wherever depth jumps (silhouettes) or the
  *                    surface normal turns sharply (creases), and gives colours a little punch.
- *  4. FXAA         — smooths the jagged ink lines (they come from non-MSAA buffers, and the
+ *  4. SMAA         — smooths the jagged ink lines (they come from non-MSAA buffers, and the
  *                    final full-screen quad gets no hardware antialiasing).
  */
 export class InkRenderer {
-  constructor(renderer, { thickness = 1.25, saturation = 1.18, contrast = 1.06, ink = 0x14110f, fxaa = true } = {}) {
+  constructor(renderer, { thickness = 1.25, saturation = 1.18, contrast = 1.06, ink = 0x14110f, smaa = true } = {}) {
     this.renderer = renderer;
-    this.fxaa = fxaa;
+    this.smaa = smaa;
     this.thickness = thickness;
     this.colorTarget = new THREE.WebGLRenderTarget(1, 1, { samples: 4, type: THREE.HalfFloatType });
     this.normalTarget = new THREE.WebGLRenderTarget(1, 1, {
@@ -22,7 +22,7 @@ export class InkRenderer {
       depthTexture: new THREE.DepthTexture(1, 1),
     });
     this.normalMaterial = new THREE.MeshNormalMaterial();
-    // Composite lands here (already sRGB-encoded) so FXAA can smooth it on the way to the screen.
+    // Composite lands here (already sRGB-encoded) so SMAA can smooth it on the way to the screen.
     this.inkTarget = new THREE.WebGLRenderTarget(1, 1, { depthBuffer: false });
 
     this.material = new THREE.ShaderMaterial({
@@ -83,7 +83,7 @@ export class InkRenderer {
           }
           col = mix(col, inkColor, edge);
           gl_FragColor = vec4(clamp(col, 0.0, 1.0), 1.0);
-          // Encode to sRGB by hand: FXAA expects display-space values, and the renderer's
+          // Encode to sRGB by hand: SMAA expects display-space values, and the renderer's
           // automatic conversion only happens when drawing straight to the canvas.
           gl_FragColor = sRGBTransferOETF(gl_FragColor);
         }
@@ -97,17 +97,8 @@ export class InkRenderer {
     this.quadScene.add(this.quad);
     this.quadCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
 
-    this.fxaaMaterial = new THREE.ShaderMaterial({
-      ...FXAAShader,
-      uniforms: THREE.UniformsUtils.clone(FXAAShader.uniforms),
-      depthTest: false,
-      depthWrite: false,
-    });
-    this.fxaaMaterial.uniforms.tDiffuse.value = this.inkTarget.texture;
-    this.fxaaQuad = new THREE.Mesh(this.quad.geometry, this.fxaaMaterial);
-    this.fxaaQuad.frustumCulled = false;
-    this.fxaaScene = new THREE.Scene();
-    this.fxaaScene.add(this.fxaaQuad);
+    this.smaaPass = new SMAAPass();
+    this.smaaPass.renderToScreen = true;
   }
 
   setSize(width, height) {
@@ -116,7 +107,7 @@ export class InkRenderer {
     this.colorTarget.setSize(w, h);
     this.normalTarget.setSize(w, h);
     this.inkTarget.setSize(w, h);
-    this.fxaaMaterial.uniforms.resolution.value.set(1 / w, 1 / h);
+    this.smaaPass.setSize(w, h);
     this.material.uniforms.texel.value.set(1 / w, 1 / h);
     // Lines stay a consistent on-screen weight regardless of resolution.
     this.material.uniforms.thickness.value = this.thickness * Math.max(1, h / 720);
@@ -145,13 +136,13 @@ export class InkRenderer {
     scene.background = bg;
     r.shadowMap.autoUpdate = autoShadow;
 
-    if (this.fxaa) {
+    if (this.smaa) {
       r.setRenderTarget(this.inkTarget);
       r.render(this.quadScene, this.quadCamera);
-      r.setRenderTarget(null);
-      r.render(this.fxaaScene, this.quadCamera);
+      r.setClearColor(0x000000, 0); // SMAA's edge pass discards non-edges, so it needs a black clear
+      this.smaaPass.render(r, null, this.inkTarget);
     } else {
-      // Without FXAA the composite goes straight to the (sRGB) canvas.
+      // Without SMAA the composite goes straight to the (sRGB) canvas.
       r.setRenderTarget(null);
       r.render(this.quadScene, this.quadCamera);
     }
