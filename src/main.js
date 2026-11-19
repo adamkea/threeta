@@ -593,6 +593,7 @@ function interiorFrame(dt) {
 /** Per-frame bookkeeping & visuals out on the street. */
 function streetFrame(dt) {
   lights.update(dt);
+  city.update(dt);
   for (const c of allCars()) if (c.active) c.syncMesh();
   skids.update(dt, allCars());
   if (player.ped.active) {

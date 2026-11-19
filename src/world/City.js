@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { createRng } from '../core/random.js';
 import { toon } from '../render/toon.js';
 import { createLandmark } from './Landmarks.js';
+import { createStreetGrime } from './StreetGrime.js';
 import { CITY, LAYOUT, LOT, WATER_Y, blockAt, groundHeight, offIsland, toWorld } from './CityLayout.js';
 import {
   bounds, centroid, clipHalfPlane, insideConvex, isAxisRect, offsetConvex, offsetConvexPaired, signedArea,
@@ -39,10 +40,11 @@ export function createCity(seed = 1337) {
   const landmarks = [];
   const parks = [];
   const windowTex = createWindowTexture();
+  const extras = { facades: [], roofTops: [] }; // for the street grime
 
   for (const b of blocks) {
     if (b.use !== 'lot') extrudeSlab(slabs, b.shape, 0, CITY.curbHeight);
-    if (b.use === 'buildings') buildBlock(rng, b, walls, roofs, colliders, buildings);
+    if (b.use === 'buildings') buildBlock(rng, b, walls, roofs, colliders, buildings, extras);
     else if (b.use === 'park') parks.push(b);
   }
   for (const l of LAYOUT.landmarks) {
@@ -70,6 +72,9 @@ export function createCity(seed = 1337) {
   group.add(parking.group);
   group.add(createStreetLamps(colliders));
 
+  const grime = createStreetGrime({ ...extras, colliders, seed: seed + 11 });
+  group.add(grime.group);
+
   return {
     group,
     colliders,
@@ -79,6 +84,8 @@ export function createCity(seed = 1337) {
     blocks,
     landmarks,
     parkingSpots: parking.spots,
+    /** Per-frame animation of the city dressing (manhole steam). */
+    update: grime.update,
   };
 }
 
@@ -206,7 +213,7 @@ function splitPlots(rng, poly, downtown, depth = 0, out = []) {
   return out;
 }
 
-function buildBlock(rng, block, walls, roofs, colliders, buildings) {
+function buildBlock(rng, block, walls, roofs, colliders, buildings, extras) {
   const inner = offsetConvex(block.shape, CITY.sidewalk);
   if (!inner) return;
   const downtown = block.downtown;
@@ -221,7 +228,7 @@ function buildBlock(rng, block, walls, roofs, colliders, buildings) {
     const base = 6 + downtown * 16;
     const h = rng.range(base * 0.6, base * 1.4) + (rng.chance(0.08 + downtown * 0.2) ? rng.range(8, 18) : 0);
     const color = new THREE.Color(rng.pick(BUILDING_COLORS)).offsetHSL(0, 0, rng.range(-0.05, 0.05));
-    addBuilding(rng, plot, CITY.curbHeight, h, color, walls, roofs);
+    addBuilding(rng, plot, CITY.curbHeight, h, color, walls, roofs, { block, id: buildings.length, extras });
     const bb = bounds(plot);
     const rect = isAxisRect(plot);
     colliders.push(rect ? { ...bb } : { ...bb, poly: plot });
@@ -229,13 +236,26 @@ function buildBlock(rng, block, walls, roofs, colliders, buildings) {
   }
 }
 
-/** Walls, a flat roof inside a parapet lip, and maybe a rooftop box, for one footprint. */
-function addBuilding(rng, poly, y0, h, color, walls, roofs) {
+/**
+ * Walls, a flat roof inside a parapet lip, and maybe a rooftop box, for one footprint. Records
+ * the walls and roof in `meta.extras` (if given) for the street grime to dress.
+ */
+function addBuilding(rng, poly, y0, h, color, walls, roofs, meta = null) {
   const top = y0 + h;
   const n = poly.length;
   for (let i = 0; i < n; i++) {
     const a = poly[i], b = poly[(i + 1) % n];
     walls.wall(b.x, b.z, a.x, a.z, y0, top, color);
+    if (meta) {
+      const len = Math.hypot(b.x - a.x, b.z - a.z);
+      if (len > 1e-3) {
+        meta.extras.facades.push({
+          ax: a.x, az: a.z, bx: b.x, bz: b.z, len,
+          nx: (b.z - a.z) / len, nz: -(b.x - a.x) / len, // outward (CCW footprint)
+          y0, top, block: meta.block, building: meta.id,
+        });
+      }
+    }
   }
   // Flat grey roof inside a parapet lip — gives the ink pass a crisp rooftop outline.
   const roofCol = new THREE.Color(0x7d7a78).lerp(color, 0.25);
@@ -243,6 +263,8 @@ function addBuilding(rng, poly, y0, h, color, walls, roofs) {
   const lipTop = lip.clone().multiplyScalar(1.1);
   const ph = 0.7;
   const inner = offsetConvexPaired(poly, 0.5);
+  const roofTop = meta ? { poly: inner ?? poly, top, height: h, box: null, building: meta.id } : null;
+  if (roofTop) meta.extras.roofTops.push(roofTop);
   if (inner) {
     roofs.polyTop(inner, top, roofCol);
     for (let i = 0; i < n; i++) {
@@ -269,6 +291,7 @@ function addBuilding(rng, poly, y0, h, color, walls, roofs) {
         roofs.wall(b.x, b.z, a.x, a.z, top, unitTop, dc);
       }
       roofs.polyTop(box, unitTop, dc.clone().multiplyScalar(1.1));
+      if (roofTop) roofTop.box = { minX: px, maxX: px + s, minZ: pz, maxZ: pz + s };
     }
   }
 }

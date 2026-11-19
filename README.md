@@ -135,6 +135,25 @@ Comic-book rendering in the spirit of Chinatown Wars: toon (banded) materials (`
 plus an ink pass (`src/render/InkRenderer.js`) that draws thick black outlines from depth and normal
 edges and boosts saturation. Roads have double-yellow centre lines, stop lines and zebra crossings.
 
+### Street grime
+
+`src/world/StreetGrime.js` roughs the clean city up into something grittier, all deterministic and
+instanced or merged so it costs a handful of draw calls:
+
+- **Ground:** oil drips down the lanes, stains, cracks, tarmac patches, manhole covers and storm drains
+  on the roads; gum, cigarette butts, litter, crushed coffee cups, pizza boxes, broken glass and the odd
+  sprayed tag on the sidewalks; muck washed into the gutters.
+- **Curbside:** piles of bin bags, overflowing wire trash cans, fire hydrants, rows of newspaper boxes and
+  dumpsters (these are solid).
+- **Walls:** dirt splashed up the bottom of street-facing walls, plus graffiti: bubble-letter throw-ups,
+  handstyle tags, wheatpaste posters and sticker bombs. Fire escapes zig-zag up some of the walk-ups.
+- **Rooftops:** wooden water towers, tar stains and the occasional big throw-up meant to be read from
+  above.
+- **Steam** rises from some manholes and from striped steam stacks in the road (GPU-animated sprites).
+
+The textures are drawn on canvases at load (`src/world/grimeTextures.js`). Flat decals are kept out of
+the ink pass so they don't get outlined.
+
 ## Layout
 
 - `src/main.js` – renderer, lighting, fixed-step game loop
