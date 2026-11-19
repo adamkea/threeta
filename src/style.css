@@ -89,6 +89,8 @@ html, body {
 #map .legend .you::before { background: #ffd23a; }
 #map .legend .cop::before { background: #ff4a3a; }
 #map .legend .car::before { background: #e9e4da; }
+#map .legend .station::before { background: #22385c; box-shadow: inset 0 0 0 2px #f2c230; }
+#map .legend .hospital::before { background: #fff linear-gradient(#d23a2f, #d23a2f) center / 3px 7px no-repeat; }
 #map .legend .hint { opacity: .7; font-weight: 400; }
 #map .legend .hint::before { display: none; }
 
