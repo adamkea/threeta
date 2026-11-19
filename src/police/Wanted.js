@@ -20,11 +20,23 @@ export const CRIMES = {
   shootCop: 160,
   killCop: 260,
   shootPoliceCar: 30,
+  destroyPoliceCar: 140, // blowing one up
 };
 
 export class Wanted {
   constructor() {
+    /** Dev toggle: while true, crimes add no heat and the level stays at zero. */
+    this.suppressed = false;
     this.clear();
+  }
+
+  /** Jump straight to a star level (0–5), as if the matching amount of heat had been earned. */
+  setStars(stars) {
+    stars = Math.max(0, Math.min(5, Math.round(stars)));
+    if (!stars) return this.clear();
+    this.heat = THRESHOLDS[stars];
+    this.stars = stars;
+    this.unseenTime = 0;
   }
 
   clear() {
@@ -45,6 +57,7 @@ export class Wanted {
   }
 
   report(crime) {
+    if (this.suppressed) return;
     const heat = CRIMES[crime] ?? 0;
     this.heat += heat;
     if (heat) this.unseenTime = 0; // a fresh crime tells them exactly where you are

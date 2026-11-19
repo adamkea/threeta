@@ -20,6 +20,9 @@ import { CityMap } from './ui/CityMap.js';
 import { weaponIcon } from './ui/weaponIcons.js';
 import { CombatSystem } from './combat/CombatSystem.js';
 import { ParkedCars } from './vehicles/ParkedCars.js';
+import { VehicleDamageSystem } from './vehicles/VehicleDamageSystem.js';
+import { DevConsole } from './ui/DevConsole.js';
+import { PerfStats } from './ui/PerfStats.js';
 
 const canvas = document.getElementById('game');
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: false }); // AA is handled in InkRenderer (MSAA colour + SMAA)
@@ -116,6 +119,37 @@ combat.onHit = ({ shooter, target, kind, killed }) => {
     if (killed) wanted.report(cop ? 'killCop' : 'killPerson');
   } else if (kind === 'car' && isPoliceCar(target)) wanted.report('shootPoliceCar');
 };
+
+// --- Vehicle damage: drivers bail out of burning cars, wrecks explode ---
+const damage = new VehicleDamageSystem(scene, { peds: allPeds });
+const byPlayer = (source) => source != null && (source === player.ped || source === player.vehicle);
+/** Whoever is driving a (non-player) car gets out on the driver's side and runs. */
+function bailOut(car) {
+  const side = car.right.multiplyScalar(-(car.cfg.width / 2 + 0.8));
+  const spot = car.position.clone().add(side);
+  if (traffic.drivers.has(car)) {
+    traffic.release(car);
+    player.freeCars.push(car);
+    npcs.spawnFleeing(spot.x, spot.y, car.position, car.position);
+  } else if (police.owns(car)) {
+    police.surrender(car, spot);
+    player.freeCars.push(car);
+  }
+}
+damage.onStateChange = (car, state) => {
+  if (state.bail && car !== player.vehicle) bailOut(car);
+  // Still at the wheel when it goes up: thrown out, right into the blast.
+  if (state.destroyed && car === player.vehicle) player.forceExit(world);
+};
+damage.onDestroyed = (car, source) => {
+  if (car.modelName === 'police' && byPlayer(source)) wanted.report('destroyPoliceCar');
+};
+damage.onBlastHit = (ped, killed, source) => {
+  if (ped === player.ped || !byPlayer(source)) return;
+  const cop = ped.role === 'cop';
+  wanted.report(killed ? (cop ? 'killCop' : 'killPerson') : cop ? 'shootCop' : 'shootPerson');
+};
+
 traffic.populate({ x: SPAWN.x, z: SPAWN.z }, allCars());
 npcs.populate({ x: SPAWN.x, z: SPAWN.z });
 const parked = new ParkedCars(scene, rng, city.parkingSpots, () => player.freeCars);
@@ -181,6 +215,8 @@ function resetPlayer() {
 // While being arrested (or dead) the player has no control.
 const NO_INPUT = { throttle: 0, steer: 0, move: { x: 0, y: 0 }, isDown: () => false, wasPressed: () => false };
 let bustedTimer = 0; // > 0 while the BUSTED / FLATLINED sequence plays
+let respawnAt = null; // where the player comes back once it ends: the police station or the hospital
+const landmark = (kind) => city.landmarks.find((l) => l.kind === kind);
 let bannerTimer = 0;
 const policeCtx = { player, wanted, world };
 
@@ -196,6 +232,7 @@ function step(dt) {
   resolveCarCollisions(active, 0.3, onCarHit);
   resolvePedCarCollisions(peds, active, onKnockdown);
   resolvePedPedCollisions(peds);
+  damage.step(dt, active);
   ramCooldown = Math.max(0, ramCooldown - dt);
 }
 
@@ -205,25 +242,38 @@ function showBanner(text, kind, time = 2.5) {
   bannerTimer = time;
 }
 
-/** Arrested or killed: lose the car, start again back at the start with full health and a clean slate. */
+/**
+ * Arrested or killed: lose the car and walk out of the police station (busted) or the hospital
+ * (dead) with full health and a clean slate.
+ */
 function finishArrest() {
+  const { x, z, heading } = respawnAt.respawn;
   player.forceExit(world);
   player.ped.revive();
-  player.ped.reset(SPAWN.x - 9, SPAWN.z);
+  player.ped.reset(x, z, heading);
   wanted.clear();
   police.standDown();
+  // Cut straight to the new spot, and bring the streets around it to life.
+  rig.initialised = false;
+  const focus = { x, z };
+  traffic.repopulate(focus, allCars());
+  npcs.repopulate(focus);
+  parked.manage(focus, allCars(), disposeObject, 0);
 }
 
 function updateWanted(dt) {
   const hadStars = wanted.stars;
   if (bustedTimer === 0 && player.inVehicle && player.vehicle.submerged) {
     bustedTimer = 4; // went into the sea with the car
+    respawnAt = landmark('hospital');
     showBanner('DROWNED', 'dead', 4);
   } else if (bustedTimer === 0 && !player.inVehicle && player.ped.dead) {
     bustedTimer = 4;
+    respawnAt = landmark('hospital');
     showBanner(player.ped.overboard ? 'DROWNED' : 'FLATLINED', 'dead', 4);
   } else if (police.busted && bustedTimer === 0) {
     bustedTimer = 3;
+    respawnAt = landmark('police');
     showBanner('BUSTED', 'busted', 3);
   }
   if (bustedTimer > 0) {
@@ -268,9 +318,58 @@ function updateCombatHud(dt) {
   canvas.style.cursor = player.armed && bustedTimer === 0 ? 'crosshair' : '';
 }
 
+// --- Dev console (` to toggle) ---
+const devConsole = new DevConsole({ onOpen: () => input.releaseAll() });
+
+/** Set the wanted level from the console, standing the police down when it hits zero. */
+function setWanted(stars) {
+  const had = wanted.stars;
+  wanted.setStars(stars);
+  if (had && !wanted.stars) police.standDown();
+}
+
+const wantedStatus = () =>
+  `Wanted: ${wanted.stars} star${wanted.stars === 1 ? '' : 's'}${wanted.suppressed ? ' (wanted level disabled)' : ''}`;
+
+devConsole.register('wanted', 'wanted [clear | up [n] | down [n] | 0-5 | off | on] — show / change the wanted level', ([sub, n]) => {
+  const count = n === undefined ? 1 : Number(n);
+  if (n !== undefined && !Number.isFinite(count)) throw new Error(`Not a number: "${n}"`);
+  if (sub === 'off' || sub === 'on') {
+    wanted.suppressed = sub === 'off';
+    if (wanted.suppressed) setWanted(0);
+    return wanted.suppressed ? 'Wanted level disabled — crimes are ignored.' : 'Wanted level enabled.';
+  }
+  if (sub !== undefined && sub !== 'clear' && wanted.suppressed) {
+    throw new Error('Wanted level is disabled — run "wanted on" first.');
+  }
+  if (sub === undefined) return wantedStatus();
+  if (sub === 'clear') setWanted(0);
+  else if (sub === 'up') setWanted(wanted.stars + count);
+  else if (sub === 'down') setWanted(wanted.stars - count);
+  else if (/^[0-5]$/.test(sub)) setWanted(Number(sub));
+  else throw new Error(`Unknown option "${sub}". Try: clear, up, down, 0-5, off, on.`);
+  return wantedStatus();
+});
+
+// Performance overlay: shown while the console is open, or pinned with `stats on`.
+const perf = new PerfStats(renderer, () => {
+  const cars = allCars();
+  return {
+    cars: `${cars.filter((c) => c.active).length} / ${cars.length}`,
+    peds: allPeds().length,
+    police: police.units.length,
+  };
+});
+let perfPinned = false;
+devConsole.register('stats', 'stats [on | off] — keep the performance overlay up with the console closed', ([sub]) => {
+  if (sub !== 'on' && sub !== 'off') throw new Error('Usage: stats on | off');
+  perfPinned = sub === 'on';
+  return perfPinned ? 'Performance overlay pinned.' : 'Performance overlay shows only while the console is open.';
+});
+
 // Dev-only hook for debugging / automated tests.
 if (import.meta.env.DEV) {
-  window.__game = { parked, skids, player, traffic, npcs, lights, world, allCars, allPeds, step, input, wanted, police, combat, STEP: 1 / 120 };
+  window.__game = { parked, skids, player, traffic, npcs, lights, world, allCars, allPeds, step, input, wanted, police, combat, damage, rig, city, devConsole, STEP: 1 / 120 };
 }
 
 // --- Main loop: fixed-step physics, variable-rate rendering ---
@@ -281,6 +380,8 @@ let last = performance.now();
 function frame(now) {
   const dt = Math.min(0.1, (now - last) / 1000);
   last = now;
+  perf.setVisible(perfPinned || devConsole.isOpen);
+  perf.beginFrame(dt);
 
   if (bustedTimer === 0) {
     if (input.wasPressed('reset')) resetPlayer();
@@ -292,10 +393,13 @@ function frame(now) {
   if (input.wasPressed('map')) cityMap.toggle();
 
   acc += dt;
-  while (acc >= STEP) {
-    step(STEP);
-    acc -= STEP;
-  }
+  perf.measure('sim', () => {
+    while (acc >= STEP) {
+      step(STEP);
+      acc -= STEP;
+      perf.addSteps(1);
+    }
+  });
 
   // --- Per-frame bookkeeping & visuals ---
   lights.update(dt);
@@ -306,6 +410,7 @@ function frame(now) {
     player.ped.syncMesh(dt);
   }
   combat.update(dt);
+  damage.update(dt, allCars(), rig.focus);
   traffic.manage(rig.focus, allCars());
   updateWanted(dt);
   police.manage(policeCtx, allCars());
@@ -325,7 +430,7 @@ function frame(now) {
   promptEl.textContent = player.inVehicle || bustedTimer > 0 ? '' : canEnter ? (occupied ? 'F — hijack car' : 'F — get in') : '';
   updateCombatHud(dt);
 
-  ink.render(scene, camera);
+  perf.measureRender(() => ink.render(scene, camera));
   cityMap.render(dt, {
     player: player.body,
     inVehicle: player.inVehicle,
@@ -334,6 +439,7 @@ function frame(now) {
     cops: npcs.peds.filter((p) => p.role === 'cop' && !p.isDown),
   });
   input.endFrame();
+  perf.endFrame();
   requestAnimationFrame(frame);
 }
 requestAnimationFrame(frame);

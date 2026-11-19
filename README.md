@@ -23,7 +23,7 @@ Controls:
 Everyone on foot has health (`src/combat/Health.js`): the player 100, civilians 60, gang members and
 cops 100. Getting hit by a car hurts in proportion to its speed (fast hits kill). Your health bar sits
 under the wanted stars, and the screen edges flash red when you're hurt. Die and you're **FLATLINED**:
-you respawn back at the start with full health and a clean record. Bodies stay on the street for a while.
+you wake up outside the **hospital** with full health and a clean record. Bodies stay on the street for a while.
 
 You start with a holstered pistol (12-round mag, 60 spare). With a gun out you face the mouse cursor
 and can strafe. Bullets are instant hitscan rays stopped by the first person, car or building in the way.
@@ -35,13 +35,44 @@ Guns are data: add an entry to `WEAPONS` in `src/combat/weapons.js` (damage, fir
 magazine, reload time, range, spread, pellets, knockback, noise) and give it to the player with
 `player.giveWeapon(WEAPONS.x)`; Q cycles through what you carry.
 
+## Vehicle damage
+
+Every vehicle has hit points and goes through a series of damage states (`src/vehicles/damage.js`):
+**intact → dented → smoking → wrecked → burning → destroyed**. Crashes (into walls or other cars,
+scaled by how hard the hit was), bullets and explosions all wear it down. Each state can make the
+engine weaker and the steering worse, grime and bend the bodywork, knock off loose parts (bumpers,
+mirrors, plates, spoilers, roof signs), smash the headlights, and pour out white then black smoke.
+Once a car is **burning**, AI drivers bail out and run, and the fire burns it down in a few seconds.
+The final state is **destroyed**: the car explodes, hurting and shoving people and cars nearby
+(which can set off other cars in a chain), and leaves a burnt-out shell sitting on its rims that
+can't be driven or entered. If you're still inside when it goes up, you won't survive. Blowing up a
+police car raises your wanted level. There's no HUD readout: how the car looks tells you its state.
+
+This works for every model, current and future, because it lives in `Car` itself:
+- **New model, no extra work:** any entry in `MODELS` (`src/vehicles/carModels.js`) gets the default
+  states and 700 hit points.
+- **Tune a model** with an optional `damage` entry: `damage: { hp: 950 }` for a tougher van,
+  `damage: { engine: -0.35 }` to make smoke and flames come from a rear engine, or
+  `damage: { states: [...] }` for a completely different progression (the last state is always the
+  destroyed one).
+- **States are data:** each entry in `DAMAGE_STATES` sets the health fraction where it starts
+  (`at`) plus optional `power`, `steer`, `wear`, `shed`, `lights`, `smoke`, `fire`, `bleed`
+  (health lost per second) and `bail`. Add, remove or retune states there.
+- **Breakable parts:** in `buildCarMesh`, add a part with `looseAdd(...)` instead of `add(...)` and
+  it can be knocked off.
+- **Damage it from new code** with `car.damage.hit(amount, source)` or
+  `car.damage.impact(deltaV, source)`. `car.wrecked` says whether it's destroyed, and `car.repair()`
+  makes it good as new. `VehicleDamageSystem` (`src/vehicles/VehicleDamageSystem.js`) runs the
+  world-level side (bailing out, explosions, smoke, fire, debris) and has `onStateChange`,
+  `onDestroyed` and `onBlastHit` hooks.
+
 ## Wanted level
 
 Crimes raise a 0–5 star wanted level (top right): running people over (cops count for a lot more),
 ramming patrol cars, stealing a police car, and carjacking where a cop can see you. While the police
 chase you the level creeps up. Patrol cars (sirens flashing) come at you from out of view, cut you off and
 ram you. Stop, or go on foot, and an officer jumps out to make the arrest. Beat cops nearby join in on foot.
-Get caught and you're **BUSTED**: you lose the car and start again with a clean record. To get away, break
+Get caught and you're **BUSTED**: you lose the car and walk out of the **police station** with a clean record. To get away, break
 line of sight and keep your distance. The stars flash, and a bar fills until the police give up.
 
 ## Look
@@ -55,6 +86,8 @@ edges and boosts saturation. Roads have double-yellow centre lines, stop lines a
 - `src/main.js` – renderer, lighting, fixed-step game loop
 - `src/world/City.js` – procedural seeded city grid (roads, markings, buildings, parks, lamps) + AABB colliders
 - `src/vehicles/Car.js` – arcade car physics (grip/drift, steering, collisions) and mesh
+- `src/world/Landmarks.js` – special whole-block buildings: the police station (where you end up when busted) and the hospital (where you end up when you die); which blocks they sit on, their meshes, signs, roof markings and respawn points
+- `src/vehicles/damage.js` / `VehicleDamageSystem.js` – damage states for every vehicle; smoke, fire, explosions
 - `src/world/ColliderGrid.js` – spatial hash so cars only test nearby static colliders
 - `src/traffic/RoadNetwork.js` – lane geometry helpers over the intersection grid (right-hand traffic)
 - `src/traffic/TrafficLights.js` – per-intersection signal cycles + signal heads on the lamp posts
