@@ -96,6 +96,7 @@ export class TrafficSystem {
       if (dist < minD || dist > maxD) continue;
       if (others.some((o) => o !== car && o.active && Math.hypot(o.position.x - x, o.position.y - z) < 10)) continue;
 
+      car.repair();
       car.respray(this.rng);
       car.reset(x, z, headingOf(d), 9);
       car.active = true;

@@ -75,7 +75,7 @@ export class PlayerController {
     let best = null;
     let bestD = ENTER_RANGE;
     for (const c of cars) {
-      if (!c.active || c.overboard || c.speed > MAX_ENTER_SPEED) continue;
+      if (!c.active || c.overboard || c.wrecked || c.speed > MAX_ENTER_SPEED) continue;
       const d = c.position.distanceTo(this.ped.position);
       if (d < bestD) (bestD = d), (best = c);
     }
