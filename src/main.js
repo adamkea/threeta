@@ -28,6 +28,7 @@ import { VehicleDamageSystem } from './vehicles/VehicleDamageSystem.js';
 import { DevConsole } from './ui/DevConsole.js';
 import { PerfStats } from './ui/PerfStats.js';
 import { Shops } from './interiors/Shops.js';
+import { MissionSystem } from './missions/MissionSystem.js';
 
 const canvas = document.getElementById('game');
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: false }); // AA is handled in InkRenderer (MSAA colour + SMAA)
@@ -207,6 +208,10 @@ const shops = new Shops({ city, player, outside: scene, canEnter: () => wanted.s
 // Cut the camera straight to the new place, both ways (the fade hides the jump).
 shops.onEnter = shops.onExit = () => (rig.initialised = false);
 
+// --- Missions: pay phones ring with jobs (deliveries so far) that pay cash ---
+const missions = new MissionSystem({ scene, city, player, wanted, world, allCars, rng: createRng(7) });
+missions.onBanner = (text, kind, time) => showBanner(text, kind, time);
+
 // Drivers only need to watch for people who are actually in the road.
 const onRoad = (p) => !p.dead && groundHeight(p.position.x, p.position.y) === 0;
 
@@ -341,6 +346,8 @@ function updateWanted(dt) {
     respawnAt = landmark('police');
     showBanner('BUSTED', 'busted', 3);
   }
+  // Busted or dead: whatever job you were on is off (the banner above says why).
+  if (bustedTimer > 0 && missions.mission) missions.fail(respawnAt.kind === 'police' ? 'You got busted.' : 'You died.', false);
   if (bustedTimer > 0) {
     bustedTimer -= dt;
     if (bustedTimer <= 0) (bustedTimer = 0), finishArrest();
@@ -471,12 +478,32 @@ devConsole.register('money', 'money [amount | +amount] — show / set your cash'
   return `Cash: $${player.money.toLocaleString('en-US')}`;
 });
 
+devConsole.register('mission', 'mission [start | cancel] — show the current job, start a delivery, or call it off', ([sub]) => {
+  if (sub === 'start') return missions.startNearest();
+  if (sub === 'cancel') {
+    if (!missions.mission) throw new Error('No job on.');
+    missions.fail('Cancelled.');
+    return 'Job cancelled.';
+  }
+  if (sub !== undefined) throw new Error('Usage: mission [start | cancel]');
+  const m = missions.mission;
+  if (!m) return missions.available ? 'No job on — the phones are ringing.' : 'No job on.';
+  const time = m.timeLeft === null ? `${m.timeLimit}s once you're in the van` : `${Math.ceil(m.timeLeft)}s left`;
+  return `${m.title}: ${m.objective} — pays ${'$' + m.pay.toLocaleString('en-US')}, ${time}.`;
+});
+
 // Teleport: to coordinates, or to a named place. Cars land in the nearest lane.
 const PLACES = {
   spawn: () => SPAWN,
   police: () => landmark('police').respawn,
   hospital: () => landmark('hospital').respawn,
   gunshop: () => landmark('gunshop').respawn,
+  warehouse: () => landmark('warehouse').respawn,
+  phone: () => {
+    const b = player.body.position;
+    const p = city.payPhones.reduce((a, q) => (Math.hypot(q.x - b.x, q.z - b.y) < Math.hypot(a.x - b.x, a.z - b.y) ? q : a));
+    return p.stand;
+  },
   diagonal: () => {
     const g = LAYOUT.graph;
     const e = g.edges.filter((x) => x.width === 16)[2]; // the diagonal avenues are 16 m wide
@@ -525,7 +552,7 @@ devConsole.register('stats', 'stats [on | off] — keep the performance overlay 
 
 // Dev-only hook for debugging / automated tests.
 if (import.meta.env.DEV) {
-  window.__game = { shops, policeCtx, parked, skids, player, traffic, npcs, lights, world, allCars, allPeds, step, input, wanted, police, combat, damage, rig, city, devConsole, STEP: 1 / 120 };
+  window.__game = { missions, shops, policeCtx, parked, skids, player, traffic, npcs, lights, world, allCars, allPeds, step, input, wanted, police, combat, damage, rig, city, devConsole, STEP: 1 / 120 };
 }
 
 // --- Main loop: fixed-step physics, variable-rate rendering ---
@@ -542,7 +569,7 @@ function frame(now) {
   shops.update(dt, input); // before the F key is handled below, so opening the menu doesn't also buy
   if (bustedTimer === 0 && !shops.busy) {
     const inShop = !!shops.inside;
-    if (input.wasPressed('use') && !shops.use()) player.use(allCars(), world);
+    if (input.wasPressed('use') && !shops.use() && (inShop || !missions.use())) player.use(allCars(), world);
     if (!inShop) {
       if (input.wasPressed('reset')) resetPlayer();
       if (input.wasPressed('weapon') && !player.inVehicle) player.cycleWeapon();
@@ -574,6 +601,9 @@ function frame(now) {
     cars: allCars().filter((c) => !isPoliceCar(c)),
     policeCars: allCars().filter(isPoliceCar),
     cops: npcs.peds.filter((p) => p.role === 'cop' && !p.isDown),
+    phones: missions.available ? city.payPhones : [],
+    target: missions.target,
+    route: cityMap.open ? missions.route() : null,
   });
   input.endFrame();
   perf.endFrame();
@@ -587,6 +617,7 @@ function interiorFrame(dt) {
   rig.setZoom(...ZOOM.interior);
   rig.update(dt, shops.camTarget);
   speedBox.style.visibility = 'hidden';
+  missions.hud.arrow.style.display = 'none';
   promptEl.textContent = bustedTimer > 0 ? '' : shops.prompt();
 }
 
@@ -604,6 +635,7 @@ function streetFrame(dt) {
   damage.update(dt, allCars(), rig.focus);
   traffic.manage(rig.focus, allCars());
   updateWanted(dt);
+  missions.update(dt, camera);
   police.manage(policeCtx, allCars());
   npcs.manage(dt, rig.focus);
   parked.manage(rig.focus, allCars(), disposeObject);
@@ -620,6 +652,7 @@ function streetFrame(dt) {
   const occupied = traffic.drivers.has(canEnter) || police.owns(canEnter);
   const what = canEnter?.isBike ? 'bike' : 'car';
   const carPrompt = canEnter ? (occupied ? `F — hijack ${what}` : canEnter.isBike ? 'F — get on' : 'F — get in') : '';
-  promptEl.textContent = player.inVehicle || bustedTimer > 0 ? '' : shops.prompt() || carPrompt;
+  const missionPrompt = bustedTimer > 0 ? '' : missions.prompt();
+  promptEl.textContent = bustedTimer > 0 ? '' : missionPrompt || (player.inVehicle ? '' : shops.prompt() || carPrompt);
 }
 requestAnimationFrame(frame);

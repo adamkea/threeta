@@ -59,11 +59,35 @@ holstered indoors, and you can't go in with the police after you.
 The first is **Lock & Load**, a gun shop round the corner from where you start (crosshair badge on the
 map). Walk up to the counter and press **F** to buy guns: the **shotgun** (8 pellets a shot) and **SMG**
 (full auto), then ammo for anything you own. You start with **$2,500**, shown under your health bar.
-(There's no way to earn more yet — use `money <n>` in the dev console.)
+Earn more by doing jobs (see **Missions**), or use `money <n>` in the dev console.
 
 To add a shop: give a landmark an `entrance` in `src/world/Landmarks.js`, write its interior (see
 `src/interiors/GunShopInterior.js`: its own scene, lights, colliders, spawn point, counter and exit
 zone) and register it in `INTERIORS` in `src/interiors/Shops.js`.
+
+## Missions
+
+Pay phones (blue kerbside pedestals with a PHONE sign) are dotted round town, a dozen of them, spread out
+so there's always one a block or two away. While you've no job on, they **ring**: a pulsing green ring
+and arrow on the pavement in front of each, and green dots on the map. Walk up and press **F** to answer.
+
+The first kind of job is a **delivery**. A white panel van has been left in a car park (or at the kerb)
+nearby: find it (blue arrow over it, blue blip and GPS route on the map, and a blue arrow at the screen
+edge when it's off screen). Once you're in it the clock starts, and the job is to drive it to one of the two
+**warehouses** (Dockside Freight and Northgate Storage, out towards the docks; crate badge on the map) and
+stop in the yellow **DROP OFF** bay in the yard. You can't hand it over with the police on your tail.
+The pay is set by the road distance; damage to the van comes off it. The job fails if the van is wrecked or
+goes in the sea, if the clock runs out, or if you're busted or die. The panel at the top of the screen shows
+the job, what to do next and the time left.
+
+Code: `src/missions/MissionSystem.js` runs jobs, the ringing phones, the markers, the HUD panel, the
+edge arrow and the map route. To add a kind of job, write another `#start…` that sets `this.mission`
+(title, objective, target, timeLeft) and a step function for it. The phones are placed by
+`src/world/PayPhones.js`; the warehouses are landmarks (`warehouse` in `src/world/Landmarks.js`, with a
+`dropZone`), placed in `assignUses` in `CityLayout.js`.
+
+Dev console: `mission` shows the current job, `mission start` starts a delivery from the nearest phone,
+`mission cancel` calls it off; `tp phone` and `tp warehouse` teleport you.
 
 ## Vehicle damage
 
@@ -127,7 +151,7 @@ To change the layout, edit `generate()` in `CityLayout.js`: block sizes, warp st
 avenues, the diagonals' paths, which streets close. Junction geometry (how far each junction box reaches, crosswalks,
 stop lines, signal phases and poles) is all derived from the graph.
 
-Dev console (**`**): `tp <x> <z>` or `tp spawn | police | hospital | diagonal | park` teleports you.
+Dev console (**`**): `tp <x> <z>` or `tp spawn | police | hospital | gunshop | warehouse | phone | diagonal | park` teleports you.
 
 ## Look
 
@@ -162,7 +186,7 @@ the ink pass so they don't get outlined.
 - `src/world/geom.js` – 2D convex-polygon helpers (inset, clip, point tests)
 - `src/world/colliders.js` – static collider tests shared by cars, people, bullets and sight lines (boxes, plus convex polygons for angled buildings)
 - `src/vehicles/Car.js` – arcade car physics (grip/drift, steering, collisions) and mesh
-- `src/world/Landmarks.js` – special whole-block buildings: the police station (where you end up when busted), the hospital (where you end up when you die) and the Lock & Load gun shop; their meshes, signs, roof markings and respawn points
+- `src/world/Landmarks.js` – special whole-block buildings: the police station (where you end up when busted), the hospital (where you end up when you die), the Lock & Load gun shop and the two freight warehouses; their meshes, signs, roof markings and respawn points
 - `src/vehicles/damage.js` / `VehicleDamageSystem.js` – damage states for every vehicle; smoke, fire, explosions
 - `src/world/ColliderGrid.js` – spatial hash so cars only test nearby static colliders
 - `src/core/SpatialHash.js` – grids of the moving cars and people, rebuilt each physics step, so AI and collisions only look at neighbours
@@ -181,6 +205,8 @@ the ink pass so they don't get outlined.
 - `src/police/PoliceSystem.js` – spawns/retires patrol cars by wanted level, pulls patrol cars out of traffic, deploys officers, sends beat cops after you, decides arrests
 - `src/police/PursuitDriver.js` – police driving: shortest-route navigation over the road graph toward you, then straight at you (leading your movement) when in view; three-point turns and backing out when stuck
 - `src/police/sight.js` – line-of-sight test against buildings
+- `src/missions/MissionSystem.js` – jobs from ringing pay phones (deliveries: take a van to a warehouse), markers, HUD panel, objective arrow, GPS route, pay
+- `src/world/PayPhones.js` – places the pay phones on the sidewalks and builds them
 - `src/interiors/Shops.js` – walk-in buildings: door markers, the cut to black, swapping the drawn scene to the interior and back, the counter menu and what the gun shop stocks
 - `src/interiors/GunShopInterior.js` – the gun shop's interior: room, counter, gun racks, shelves, the clerk, its colliders
 - `src/combat/Health.js` – hit points (damage / heal / dead) for anything that can be hurt

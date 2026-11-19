@@ -143,7 +143,7 @@ export class CityMap {
       const r = 8 * s;
       g.beginPath();
       g.arc(cx, cy, r, 0, Math.PI * 2);
-      g.fillStyle = kind === 'police' ? '#22385c' : kind === 'gunshop' ? '#26354d' : '#ffffff';
+      g.fillStyle = { police: '#22385c', gunshop: '#26354d', warehouse: '#e0a526' }[kind] ?? '#ffffff';
       g.fill();
       g.lineWidth = Math.max(1.5, 0.6 * s);
       g.strokeStyle = INK;
@@ -165,6 +165,16 @@ export class CityMap {
         g.arc(cx, cy, r * 0.5, 0, Math.PI * 2);
         g.moveTo(cx, cy - r * 0.8), g.lineTo(cx, cy + r * 0.8);
         g.moveTo(cx - r * 0.8, cy), g.lineTo(cx + r * 0.8, cy);
+        g.stroke();
+      } else if (kind === 'warehouse') {
+        // A crate: square with a cross brace.
+        const q = r * 0.5;
+        g.strokeStyle = INK;
+        g.lineWidth = Math.max(1.5, 0.4 * s);
+        g.strokeRect(cx - q, cy - q, q * 2, q * 2);
+        g.beginPath();
+        g.moveTo(cx - q, cy - q), g.lineTo(cx + q, cy + q);
+        g.moveTo(cx + q, cy - q), g.lineTo(cx - q, cy + q);
         g.stroke();
       } else {
         const t = r * 0.42, l = r * 1.3;
@@ -218,7 +228,7 @@ export class CityMap {
    * Draw one frame of the map. `player` is what the player controls (a car or a person:
    * position is an (x, z) Vector2, heading faces (sin h, cos h)).
    */
-  render(dt, { player, inVehicle, cars, policeCars, cops }) {
+  render(dt, { player, inVehicle, cars, policeCars, cops, phones = [], target = null, route = null }) {
     if (!this.open) return;
     this.t += dt;
     this.layout();
@@ -244,6 +254,28 @@ export class CityMap {
     const flash = Math.floor(this.t * 4) % 2 ? '#ff4a3a' : '#3a7bff';
     for (const c of policeCars) if (c.active && c !== player) dot(c.position.x, c.position.y, r * 1.1, flash);
     for (const p of cops) dot(p.position.x, p.position.y, r * 0.7, '#3a7bff');
+
+    // Ringing pay phones, the GPS route to the current objective, and the objective itself.
+    for (const p of phones) dot(p.x, p.z, r * 0.9, '#5be37a');
+    if (route) {
+      g.beginPath();
+      route.forEach((p, i) => {
+        const [x, y] = this.toPx(p.x, p.z, size);
+        if (i) g.lineTo(x, y);
+        else g.moveTo(x, y);
+      });
+      g.lineJoin = g.lineCap = 'round';
+      g.strokeStyle = INK;
+      g.lineWidth = Math.max(5, 2.2 * s);
+      g.stroke();
+      g.strokeStyle = target?.kind === 'van' ? '#4fb3ff' : '#ffd23a';
+      g.lineWidth = Math.max(3, 1.3 * s);
+      g.stroke();
+    }
+    if (target) {
+      const blink = Math.floor(this.t * 3) % 2 === 0;
+      dot(target.x, target.z, r * (blink ? 1.7 : 1.4), target.kind === 'van' ? '#4fb3ff' : '#ffd23a');
+    }
 
     this.drawPlayer(g, player, size, s, inVehicle);
   }

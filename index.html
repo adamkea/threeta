@@ -13,8 +13,9 @@
       <div id="help">
         <b>Car:</b> <b>W/S</b> gas / brake &nbsp; <b>A/D</b> steer &nbsp; <b>Space</b> handbrake<br />
         <b>On foot:</b> <b>WASD</b> move &nbsp; <b>Shift</b> run<br />
-        <b>F</b> get in / out (or hijack), enter shops &nbsp; <b>R</b> reset &nbsp; <b>M</b> map<br />
+        <b>F</b> get in / out (or hijack), enter shops, answer phones &nbsp; <b>R</b> reset &nbsp; <b>M</b> map<br />
         <b>Q</b> draw / holster gun &nbsp; <b>Mouse</b> aim &nbsp; <b>Click</b> shoot &nbsp; <b>E</b> reload<br />
+        Ringing pay phones offer paid jobs<br />
         Crimes raise your wanted level &mdash; break line of sight to lose the cops
       </div>
       <div id="prompt"></div>
@@ -25,6 +26,8 @@
       <div id="version"></div>
       <div id="money">$0</div>
       <div id="banner"></div>
+      <div id="mission"><div class="title"></div><div class="objective"></div><div class="timer"></div></div>
+      <div id="objective-arrow"></div>
       <div id="shop">
         <div class="panel">
           <h2>Lock &amp; Load</h2>
@@ -34,7 +37,7 @@
         </div>
       </div>
       <div id="fade"></div>
-      <div id="map"><div class="frame"><canvas></canvas><div class="legend"><span class="you">You</span><span class="cop">Police</span><span class="car">Cars</span><span class="station">Police station</span><span class="hospital">Hospital</span><span class="gunshop">Gun shop</span><span class="hint">M to close</span></div></div></div>
+      <div id="map"><div class="frame"><canvas></canvas><div class="legend"><span class="you">You</span><span class="cop">Police</span><span class="car">Cars</span><span class="station">Police station</span><span class="hospital">Hospital</span><span class="gunshop">Gun shop</span><span class="warehouse">Warehouse</span><span class="phone">Pay phone</span><span class="hint">M to close</span></div></div></div>
     </div>
     <script type="module" src="/src/main.js"></script>
   </body>

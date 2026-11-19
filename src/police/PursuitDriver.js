@@ -9,7 +9,7 @@ const BRAKE = 14; // m/s² used to plan slowing for corners
  * Road distance from every junction to a target point: Dijkstra over the road graph, seeded
  * from both ends of the road nearest the target.
  */
-function distancesTo(x, z) {
+export function distancesTo(x, z) {
   const g = GRAPH;
   const dist = new Float64Array(g.nodes.length).fill(Infinity);
   const near = g.nearestLane(x, z, 0, 0, -2, 60);
