@@ -18,6 +18,20 @@ Controls:
 - **M** city map (shows you, police and traffic)
 - **Q** draw / holster your pistol (on foot), **mouse** to aim, **left click** (or **Ctrl**) to shoot, **E** reload
 
+## Motorbikes
+
+A sports bike (`motorbike` in `src/vehicles/carModels.js`) turns up in traffic and car parks, and
+`spawn motorbike` in the dev console parks one next to you. It drives with the same keys as a car,
+but it's quicker and nimbler, leans into corners and stands on its kickstand when parked. You can
+see whoever is riding it (you ride in your own jacket and a black helmet). Bikes are light, so they
+bounce off cars rather than shove them, and they're fragile. A hard crash (into a wall, or a car,
+at roughly 30 km/h or more) **throws the rider off**: they're knocked down and hurt in proportion
+to the crash, and the bike lies on its side until someone picks it up (just get back on). The same
+goes for AI riders, who get up and run.
+
+Bikes reuse `Car`: `bike: true` on a model builds it with `buildBikeMesh` and switches on the lean
+physics, and `cfg.mass` (1 for cars) weights car-vs-car impulses.
+
 ## Health & guns
 
 Everyone on foot has health (`src/combat/Health.js`): the player 100, civilians 60, gang members and

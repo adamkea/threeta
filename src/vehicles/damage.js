@@ -128,6 +128,7 @@ export class VehicleDamage {
 
   /** A crash that changed the vehicle's velocity by `dv` m/s. */
   impact(dv, source = null) {
+    if (dv > this.car.jolt) this.car.jolt = dv;
     const over = dv - IMPACT_MIN;
     return over > 0 ? this.hit(over * IMPACT_DAMAGE, source) : false;
   }

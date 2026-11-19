@@ -156,6 +156,49 @@ traffic.populate({ x: SPAWN.x, z: SPAWN.z }, allCars());
 npcs.populate({ x: SPAWN.x, z: SPAWN.z });
 const parked = new ParkedCars(scene, rng, city.parkingSpots, () => player.freeCars);
 parked.populate({ x: SPAWN.x, z: SPAWN.z }, allCars(), disposeObject);
+// --- Motorbikes: show whoever is riding, and throw them off in a hard crash ---
+const PLAYER_JACKET = 0x6b3f22; // matches the player's leather jacket
+const PLAYER_HELMET = 0x111216;
+const THROW_JOLT = 9; // m/s change in velocity that throws a rider off
+let playerOnBike = null;
+function updateRiders(cars) {
+  for (const c of cars) {
+    if (!c.isBike) continue;
+    c.setRidden(c === player.vehicle || traffic.drivers.has(c) || police.owns(c));
+  }
+  // The player rides in their own jacket (AI never gets back on a bike the player has had).
+  if (player.vehicle !== playerOnBike) {
+    playerOnBike = player.vehicle?.isBike ? player.vehicle : null;
+    playerOnBike?.dressRider(PLAYER_JACKET, PLAYER_HELMET);
+  }
+}
+/** Off the bike and onto the tarmac, carried along by the bike's speed and hurt by the crash. */
+function throwRider(bike) {
+  const fling = bike.preVel.clone().multiplyScalar(0.6);
+  const hurt = Math.max(0, bike.jolt - 7) * 5;
+  let ped = null;
+  if (bike === player.vehicle) {
+    player.forceExit(world);
+    ped = player.ped;
+  } else if (traffic.drivers.has(bike)) {
+    const spot = bike.position.clone().addScaledVector(bike.right, -1.2);
+    traffic.release(bike);
+    player.freeCars.push(bike);
+    ped = npcs.spawnFleeing(spot.x, spot.y, bike.position, bike.position);
+  }
+  if (!ped) return;
+  ped.knockDown(fling, 2.5);
+  ped.hurt(hurt, null, null, bike);
+  bike.topple();
+  bike.setRidden(false);
+}
+function checkBikeCrashes(cars) {
+  for (const c of cars) {
+    if (c.isBike && c.ridden && c.jolt > THROW_JOLT && !c.overboard) throwRider(c);
+    c.jolt = 0;
+  }
+}
+
 // Drivers only need to watch for people who are actually in the road.
 const onRoad = (p) => !p.dead && groundHeight(p.position.x, p.position.y) === 0;
 
@@ -230,6 +273,7 @@ function step(dt) {
   const active = cars.filter((c) => c.active && !c.overboard);
   // Neighbour grids for the AI (positions at the start of the step)...
   near.rebuild(active, peds, peds.filter(onRoad));
+  updateRiders(cars);
   player.step(dt, bustedTimer > 0 ? NO_INPUT : input, world);
   traffic.step(dt, near, world);
   police.step(dt, policeCtx);
@@ -241,6 +285,7 @@ function step(dt) {
   resolvePedCarCollisions(peds, near.cars, onKnockdown);
   resolvePedPedCollisions(peds, near.peds);
   damage.step(dt, active);
+  checkBikeCrashes(cars);
   ramCooldown = Math.max(0, ramCooldown - dt);
 }
 
@@ -472,7 +517,9 @@ function frame(now) {
   speedEl.textContent = Math.round(player.body.speed * 3.6);
   const canEnter = player.findEnterableCar(allCars());
   const occupied = traffic.drivers.has(canEnter) || police.owns(canEnter);
-  promptEl.textContent = player.inVehicle || bustedTimer > 0 ? '' : canEnter ? (occupied ? 'F — hijack car' : 'F — get in') : '';
+  const what = canEnter?.isBike ? 'bike' : 'car';
+  promptEl.textContent =
+    player.inVehicle || bustedTimer > 0 ? '' : canEnter ? (occupied ? `F — hijack ${what}` : canEnter.isBike ? 'F — get on' : 'F — get in') : '';
   updateCombatHud(dt);
 
   perf.measureRender(() => ink.render(scene, camera));
