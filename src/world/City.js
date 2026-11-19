@@ -19,14 +19,56 @@ export function roadCenter(i) {
   return -CITY.half + CITY.roadWidth / 2 + i * CITY.cell;
 }
 
-/** Ground height at a point: raised on sidewalks/blocks, 0 on roads. */
+// Parking lot layout, in metres from a block's min corner. The lot sits at road level inside
+// the sidewalk ring. Two aisles run along X, with driveways through the sidewalk at both ends;
+// rows of bays face onto them: one row along each edge and a double row down the middle.
+export const LOT = {
+  bayWidth: 2.8,
+  bayDepth: 5.2,
+  bays: 12, // per row
+};
+LOT.x0 = CITY.sidewalk + (CITY.blockSize - 2 * CITY.sidewalk - LOT.bays * LOT.bayWidth) / 2;
+{
+  const s = CITY.sidewalk, d = LOT.bayDepth;
+  const aisle = (CITY.blockSize - 2 * s - 4 * d) / 2;
+  LOT.aisles = [
+    [s + d, s + d + aisle],
+    [s + 3 * d + aisle, s + 3 * d + 2 * aisle],
+  ];
+  // Each row: the z range of its bays and which way a car parked nose-in faces (+1 = +Z).
+  LOT.rows = [
+    { z0: s, z1: s + d, nose: -1 },
+    { z0: s + d + aisle, z1: s + 2 * d + aisle, nose: 1 },
+    { z0: s + 2 * d + aisle, z1: s + 3 * d + aisle, nose: -1 },
+    { z0: s + 3 * d + 2 * aisle, z1: s + 4 * d + 2 * aisle, nose: 1 },
+  ];
+}
+
+/** Blocks that are parking lots, as `bx * 100 + bz`. Filled in by createCity. */
+const lotBlocks = new Set();
+
+/** Block index (0..blocks-1) and offset into it along one axis, or null if on a road. */
+function blockAt(v) {
+  const o = v + CITY.half - CITY.roadWidth;
+  if (o < 0 || o > CITY.size - 2 * CITY.roadWidth) return null;
+  const local = o % CITY.cell;
+  return local < CITY.blockSize ? [Math.floor(o / CITY.cell), local] : null;
+}
+
+/** Ground height at a point: raised on sidewalks/blocks, 0 on roads (and in parking lots). */
 export function groundHeight(x, z) {
-  const inBlock = (v) => {
-    const o = v + CITY.half - CITY.roadWidth;
-    if (o < 0 || o > CITY.size - 2 * CITY.roadWidth) return false;
-    return o % CITY.cell < CITY.blockSize;
-  };
-  return inBlock(x) && inBlock(z) ? CITY.curbHeight : 0;
+  const bx = blockAt(x);
+  const bz = blockAt(z);
+  if (!bx || !bz) return 0;
+  if (lotBlocks.has(bx[0] * 100 + bz[0])) {
+    const s = CITY.sidewalk;
+    const [lx, lz] = [bx[1], bz[1]];
+    const insideX = lx > s && lx < CITY.blockSize - s;
+    const insideZ = lz > s && lz < CITY.blockSize - s;
+    if (insideX && insideZ) return 0;
+    if (insideZ && LOT.aisles.some(([a, b]) => lz > a && lz < b)) return 0; // driveway
+  }
+  return CITY.curbHeight;
 }
 
 /** World-space min corner of block `i` on either axis. */
@@ -56,22 +98,33 @@ export function createCity(seed = 1337) {
   const roofs = new QuadBuilder();
   const sidewalkMatrices = [];
   const parks = [];
+  const lots = []; // parking lots: { x0, z0 } block corners
+  const lotRng = createRng(seed + 7);
+  lotBlocks.clear();
   const buildings = []; // footprints + colours, for the map
 
   for (let bx = 0; bx < CITY.blocks; bx++) {
     for (let bz = 0; bz < CITY.blocks; bz++) {
       const x0 = blockMin(bx);
       const z0 = blockMin(bz);
-      sidewalkMatrices.push(
-        new THREE.Matrix4().makeTranslation(x0 + CITY.blockSize / 2, CITY.curbHeight / 2, z0 + CITY.blockSize / 2),
-      );
 
       // Distance from centre drives building height: tall downtown, low outskirts.
       const cx = (bx + 0.5) / CITY.blocks - 0.5;
       const cz = (bz + 0.5) / CITY.blocks - 0.5;
       const downtown = 1 - Math.min(1, Math.hypot(cx, cz) * 2);
 
-      if (rng.chance(0.1)) {
+      const park = rng.chance(0.1);
+      // One lot is always right beside the player's starting point; others are scattered about.
+      const lot = !park && ((bx === 4 && bz === 4) || lotRng.chance(0.09));
+      if (lot) {
+        lots.push({ x0, z0 });
+        lotBlocks.add(bx * 100 + bz);
+        continue; // its sidewalk is a ring with driveways, built in createParkingLots
+      }
+      sidewalkMatrices.push(
+        new THREE.Matrix4().makeTranslation(x0 + CITY.blockSize / 2, CITY.curbHeight / 2, z0 + CITY.blockSize / 2),
+      );
+      if (park) {
         parks.push({ x0, z0 });
         continue;
       }
@@ -80,9 +133,10 @@ export function createCity(seed = 1337) {
   }
 
   // Sidewalk slabs (one instanced mesh for every block).
+  const sidewalkMat = toon({ map: createTileTexture() });
   const sidewalkMesh = new THREE.InstancedMesh(
     new THREE.BoxGeometry(CITY.blockSize, CITY.curbHeight, CITY.blockSize),
-    toon({ map: createTileTexture() }),
+    sidewalkMat,
     sidewalkMatrices.length,
   );
   sidewalkMatrices.forEach((m, i) => sidewalkMesh.setMatrixAt(i, m));
@@ -101,11 +155,115 @@ export function createCity(seed = 1337) {
   group.add(roofMesh);
 
   group.add(createParks(rng, parks, colliders));
+  const parking = createParkingLots(lotRng, lots, sidewalkMat, colliders);
+  group.add(parking.group);
   group.add(createStreetLamps(colliders));
 
   addPerimeter(colliders);
 
-  return { group, colliders, buildings, parks };
+  return { group, colliders, buildings, parks, lots, parkingSpots: parking.spots };
+}
+
+/**
+ * Parking lots: a sidewalk ring with driveways, painted bays, and a "P" sign. Returns the
+ * meshes and every bay as a parking spot { x, z, heading } (heading faces nose-in or out).
+ */
+function createParkingLots(rng, lots, sidewalkMat, colliders) {
+  const g = new THREE.Group();
+  const spots = [];
+  const lines = []; // [x, z, width, length] painted strips running along Z
+  const bs = CITY.blockSize, s = CITY.sidewalk, h = CITY.curbHeight;
+  const [[a0, a1], [b0, b1]] = LOT.aisles;
+  // Sidewalk ring in block-local rects [minX, minZ, maxX, maxZ], with gaps where the aisles exit.
+  const ring = [
+    [0, 0, bs, s],
+    [0, bs - s, bs, bs],
+  ];
+  for (const [xa, xb] of [[0, s], [bs - s, bs]]) {
+    ring.push([xa, s, xb, a0], [xa, a1, xb, b0], [xa, b1, xb, bs - s]);
+  }
+
+  for (const { x0, z0 } of lots) {
+    for (const [ax, az, bx, bz] of ring) {
+      const w = bx - ax, d = bz - az;
+      const geo = new THREE.BoxGeometry(w, h, d);
+      // Keep the paving tiles the same size as on the full-block slabs.
+      const uv = geo.attributes.uv;
+      for (let i = 0; i < uv.count; i++) uv.setXY(i, (uv.getX(i) * w) / bs, (uv.getY(i) * d) / bs);
+      const m = new THREE.Mesh(geo, sidewalkMat);
+      m.position.set(x0 + ax + w / 2, h / 2, z0 + az + d / 2);
+      m.receiveShadow = true;
+      g.add(m);
+    }
+
+    for (const row of LOT.rows) {
+      const depth = row.z1 - row.z0;
+      const zc = z0 + (row.z0 + row.z1) / 2;
+      for (let k = 0; k <= LOT.bays; k++) lines.push([x0 + LOT.x0 + k * LOT.bayWidth, zc, 0.15, depth]);
+      for (let k = 0; k < LOT.bays; k++) {
+        const nose = rng.chance(0.75) ? row.nose : -row.nose; // most drivers park nose-in
+        spots.push({
+          x: x0 + LOT.x0 + (k + 0.5) * LOT.bayWidth,
+          z: zc,
+          heading: nose > 0 ? 0 : Math.PI,
+        });
+      }
+    }
+    // Line down the back of the middle double row, and along the inside of each edge row.
+    const width = LOT.bays * LOT.bayWidth;
+    for (const z of [LOT.rows[0].z1 - 0.1, LOT.rows[1].z1, LOT.rows[3].z0 + 0.1]) {
+      lines.push([x0 + LOT.x0 + width / 2, z0 + z, width, 0.15]);
+    }
+
+    // "P" sign on the sidewalk between the two west driveways.
+    const sx = x0 + s / 2, sz = z0 + (a1 + b0) / 2;
+    g.add(createParkingSign(sx, sz));
+    colliders.push({ minX: sx - 0.15, maxX: sx + 0.15, minZ: sz - 0.15, maxZ: sz + 0.15 });
+  }
+
+  if (lines.length) {
+    const mesh = new THREE.InstancedMesh(
+      new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2),
+      toon({ color: 0xeeeae0 }),
+      lines.length,
+    );
+    const m = new THREE.Matrix4();
+    lines.forEach(([x, z, w, l], i) => mesh.setMatrixAt(i, m.makeScale(w, 1, l).setPosition(x, 0.02, z)));
+    mesh.receiveShadow = true;
+    g.add(mesh);
+  }
+  return { group: g, spots };
+}
+
+let signParts = null;
+function createParkingSign(x, z) {
+  signParts ??= {
+    pole: new THREE.CylinderGeometry(0.08, 0.08, 3, 6),
+    poleMat: toon({ color: 0x8c9096 }),
+    board: new THREE.BoxGeometry(0.12, 1.2, 1.2),
+    faceMat: toon({
+      map: canvasTexture(64, (ctx) => {
+        ctx.fillStyle = '#1f5fbf';
+        ctx.fillRect(0, 0, 64, 64);
+        ctx.strokeStyle = '#ffffff';
+        ctx.lineWidth = 4;
+        ctx.strokeRect(5, 5, 54, 54);
+        ctx.fillStyle = '#ffffff';
+        ctx.font = 'bold 44px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText('P', 32, 35);
+      }),
+    }),
+  };
+  const sign = new THREE.Group();
+  const pole = new THREE.Mesh(signParts.pole, signParts.poleMat);
+  pole.position.set(x, CITY.curbHeight + 1.5, z);
+  const board = new THREE.Mesh(signParts.board, signParts.faceMat);
+  board.position.set(x, CITY.curbHeight + 3.3, z);
+  pole.castShadow = board.castShadow = true;
+  sign.add(pole, board);
+  return sign;
 }
 
 function buildBlock(rng, x0, z0, downtown, walls, roofs, colliders, buildings) {

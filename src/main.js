@@ -18,6 +18,7 @@ import { Wanted } from './police/Wanted.js';
 import { PoliceSystem } from './police/PoliceSystem.js';
 import { CityMap } from './ui/CityMap.js';
 import { CombatSystem } from './combat/CombatSystem.js';
+import { ParkedCars } from './vehicles/ParkedCars.js';
 
 const canvas = document.getElementById('game');
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
@@ -116,6 +117,8 @@ combat.onHit = ({ shooter, target, kind, killed }) => {
 };
 traffic.populate({ x: SPAWN.x, z: SPAWN.z }, allCars());
 npcs.populate({ x: SPAWN.x, z: SPAWN.z });
+const parked = new ParkedCars(scene, rng, city.parkingSpots, () => player.freeCars);
+parked.populate({ x: SPAWN.x, z: SPAWN.z }, allCars(), disposeObject);
 // Drivers only need to watch for people who are actually in the road.
 const onRoad = (p) => !p.dead && groundHeight(p.position.x, p.position.y) === 0;
 
@@ -252,7 +255,7 @@ function updateCombatHud(dt) {
 
 // Dev-only hook for debugging / automated tests.
 if (import.meta.env.DEV) {
-  window.__game = { skids, player, traffic, npcs, lights, world, allCars, allPeds, step, input, wanted, police, combat, STEP: 1 / 120 };
+  window.__game = { parked, skids, player, traffic, npcs, lights, world, allCars, allPeds, step, input, wanted, police, combat, STEP: 1 / 120 };
 }
 
 // --- Main loop: fixed-step physics, variable-rate rendering ---
@@ -292,6 +295,7 @@ function frame(now) {
   updateWanted(dt);
   police.manage(policeCtx, allCars());
   npcs.manage(dt, rig.focus);
+  parked.manage(rig.focus, allCars(), disposeObject);
   player.manage(rig.focus, disposeObject);
 
   rig.setZoom(...(player.inVehicle ? ZOOM.car : ZOOM.foot));

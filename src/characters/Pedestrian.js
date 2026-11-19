@@ -30,6 +30,12 @@ const SHIN = 0.4;
 const UPPER_ARM = 0.27;
 const FOREARM = 0.25;
 
+/** Smooth bump peaking at 1 when phase `p` is at `center` (wraps around the cycle). */
+function bump(p, center, width) {
+  const d = Math.atan2(Math.sin(p - center), Math.cos(p - center));
+  return Math.exp(-(d * d) / (2 * width * width));
+}
+
 let sharedGeo = null;
 /** Smooth body parts, shared by every person. */
 function pedGeometry() {
@@ -129,7 +135,8 @@ export class Pedestrian {
     this.active = true;
     this.downTime = 0; // > 0 while knocked down
     this.fall = 0; // 0 standing .. 1 lying flat (animated)
-    this.stride = 0;
+    this.gait = 0; // gait cycle phase (radians); left foot strikes at 0, right at PI
+    this.runBlend = 0; // 0 walking .. 1 running (smoothed)
     this.groundY = 0;
     this.justKnocked = false; // set on knockdown; observers (e.g. NpcManager) clear it
     this.health = new Health(100);
@@ -267,7 +274,12 @@ export class Pedestrian {
 
     this.position.addScaledVector(this.velocity, dt);
     this.#collideStatic(world);
-    this.stride += this.speed * dt;
+    // Strides get longer as well as quicker when running, so cadence doesn't go frantic.
+    const sp = this.speed;
+    const runT = Math.min(1, Math.max(0, (sp - WALK_SPEED * 1.05) / (RUN_SPEED * 0.92 - WALK_SPEED * 1.05)));
+    this.runBlend += (runT - this.runBlend) * Math.min(1, 8 * dt);
+    const cycleLen = 2.8 + (4.9 - 2.8) * this.runBlend; // metres travelled per full gait cycle
+    this.gait = (this.gait + (sp / cycleLen) * Math.PI * 2 * dt) % (Math.PI * 2);
   }
 
   /** Thrown by an impact (e.g. hit by a car). */
@@ -332,26 +344,68 @@ export class Pedestrian {
     this.body.rotation.x = -this.fall * (Math.PI / 2);
     this.body.position.y = this.fall * 0.25;
 
-    const s = this.isDown ? 0 : Math.min(1, this.speed / WALK_SPEED);
-    const phase = this.stride * 2.4;
-    const swing = Math.sin(phase) * 0.7 * s;
-    const c = Math.cos(phase);
-    this.legL.rotation.x = swing;
-    this.legR.rotation.x = -swing;
-    // Knees bend while each leg swings through; elbows stay a little bent and pump with the stride.
-    this.kneeL.rotation.x = 0.06 + Math.max(0, -c) * 1.0 * s;
-    this.kneeR.rotation.x = 0.06 + Math.max(0, c) * 1.0 * s;
-    this.armL.rotation.x = -swing * 0.8;
-    this.armR.rotation.x = swing * 0.8;
-    this.elbowL.rotation.x = -0.18 - (0.25 + Math.max(0, swing)) * 0.5 * s;
-    this.elbowR.rotation.x = -0.18 - (0.25 + Math.max(0, -swing)) * 0.5 * s;
+    const s = this.isDown ? 0 : Math.min(1, this.speed / (WALK_SPEED * 0.6)); // amplitude (0 = idle)
+    const r = this.isDown ? 0 : this.runBlend; // walk -> run blend
+    const p = this.gait;
+    this.#posLeg(this.legL, this.kneeL, this.footL, p, s, r);
+    this.#posLeg(this.legR, this.kneeR, this.footR, p + Math.PI, s, r);
+    // Arms swing opposite to the legs: left arm goes back as the left leg comes forward.
+    this.#posArm(this.armL, this.elbowL, p, s, r, 1);
+    this.#posArm(this.armR, this.elbowR, p + Math.PI, s, r, -1);
     if (this.weapon && !this.isDown) {
       // Gun arm held straight out in front, kicking up a little with each shot.
       this.armR.rotation.set(-Math.PI / 2 - this.recoil * 0.45, 0, 0.12);
       this.elbowR.rotation.x = -this.recoil * 0.3;
-    } else this.armR.rotation.z = 0;
-    this.torso.position.y = 1.15 + Math.abs(c) * 0.05 * s;
-    this.torso.rotation.y = swing * 0.12; // shoulders counter-rotate a touch
+    }
+
+    const c2 = Math.cos(2 * p);
+    // Walk: highest over the planted foot, lowest in double support.
+    // Run: compressed at mid-stance, highest in the flight phase between steps.
+    const walkBob = -c2 * 0.035;
+    const runBob = Math.cos(2 * (p - 0.75 * Math.PI)) * 0.075;
+    this.body.position.y += (walkBob + (runBob - walkBob) * r) * s;
+
+    // Lean into a run; shoulders counter-rotate against the hips; weight sways over the stance leg.
+    const lean = (0.05 + 0.2 * r) * s;
+    this.torso.rotation.x = lean;
+    this.torso.position.z = lean * 0.3; // keep the hips over the feet as the chest tips forward
+    this.torso.position.y = 1.15 - 0.03 * r * s;
+    this.torso.rotation.y = Math.cos(p) * (0.13 + 0.07 * r) * s;
+    this.torso.rotation.z = -Math.sin(p) * (0.045 - 0.025 * r) * s;
+  }
+
+  /** One leg at gait phase `p` (0 = this foot striking the ground, PI = pushing off behind). */
+  #posLeg(hip, knee, foot, p, s, r) {
+    const cp = Math.cos(p);
+    // Hip: + swings the leg back. Running drives the knee higher in front and reaches further back.
+    const walkHip = -cp * 0.55;
+    const runHip = -cp * 0.78 - 0.18 + Math.sin(p) * 0.12; // sin term: quick forward recovery
+    const hipX = (walkHip + (runHip - walkHip) * r) * s;
+    // Knee: + bends the shin back. A small give on landing, then a big fold while the foot recovers.
+    const walkKnee = 0.06 + 0.22 * bump(p, 0.15 * Math.PI, 0.18 * Math.PI) + 1.05 * bump(p, 1.4 * Math.PI, 0.26 * Math.PI);
+    const runKnee = 0.2 + 0.55 * bump(p, 0.15 * Math.PI, 0.2 * Math.PI) + 1.95 * bump(p, 1.28 * Math.PI, 0.38 * Math.PI);
+    const kneeX = 0.04 + (walkKnee + (runKnee - walkKnee) * r - 0.04) * s;
+    hip.rotation.x = hipX;
+    knee.rotation.x = kneeX;
+    // Ankle: keep the sole flat to the ground in stance, toes point down at push-off and in swing.
+    const stance = bump(p, 0.3 * Math.PI, 0.38 * Math.PI);
+    const pushOff = bump(p, 0.95 * Math.PI, 0.18 * Math.PI);
+    foot.rotation.x = (-(hipX + kneeX) * stance + 0.3 * pushOff + (0.15 + 0.25 * r) * (1 - stance)) * s;
+  }
+
+  /** One arm; `p` is the phase of the leg on the same side, `side` +1 left / -1 right. */
+  #posArm(shoulder, elbow, p, s, r, side) {
+    const cp = Math.cos(p);
+    const walkArm = cp * 0.42;
+    const runArm = cp * 0.75 - 0.12; // pumps from the shoulder, biased forward
+    shoulder.rotation.x = (walkArm + (runArm - walkArm) * r) * s;
+    shoulder.rotation.z = side * (0.06 + 0.06 * r * s); // hands clear of the hips
+    // Elbow: - bends the forearm forward. Loose when walking, held near 90 degrees when running,
+    // closing further as the arm drives forward.
+    const fwd = Math.max(0, -cp);
+    const walkElbow = -0.22 - 0.35 * fwd;
+    const runElbow = -1.35 - 0.4 * fwd + 0.2 * Math.max(0, cp);
+    elbow.rotation.x = -0.18 + (walkElbow + (runElbow - walkElbow) * r + 0.18) * s;
   }
 
   #buildMesh() {
@@ -399,9 +453,11 @@ export class Pedestrian {
       const knee = new THREE.Group();
       knee.position.y = -THIGH;
       hip.add(part(G.thigh, m.pants), stripe(G.thighStripe, out * 0.11, -THIGH / 2), knee);
-      const shoe = part(G.shoe, m.shoe, 0, -SHIN - 0.02, 0.06);
-      knee.add(part(G.shin, m.pants), stripe(G.shinStripe, out * 0.088, -SHIN / 2), shoe);
-      return [hip, knee];
+      const ankle = new THREE.Group();
+      ankle.position.y = -SHIN + 0.02;
+      ankle.add(part(G.shoe, m.shoe, 0, -0.04, 0.06));
+      knee.add(part(G.shin, m.pants), stripe(G.shinStripe, out * 0.088, -SHIN / 2), ankle);
+      return [hip, knee, ankle];
     };
     const arm = (x) => {
       const out = Math.sign(x);
@@ -414,8 +470,8 @@ export class Pedestrian {
       elbow.add(part(G.forearm, m.sleeve), hand);
       return [shoulder, elbow, hand];
     };
-    [this.legL, this.kneeL] = leg(0.13);
-    [this.legR, this.kneeR] = leg(-0.13);
+    [this.legL, this.kneeL, this.footL] = leg(0.13);
+    [this.legR, this.kneeR, this.footR] = leg(-0.13);
     body.add(this.legL, this.legR);
 
     const torso = new THREE.Group();
