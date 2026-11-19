@@ -1,4 +1,4 @@
-import { CITY, blockMin } from '../world/City.js';
+import { CITY, LOT, blockMin } from '../world/City.js';
 
 // Map of the whole city on a 2D canvas over the game. Same north-up view as the camera:
 // +X is right, +Z is down. The streets and buildings are drawn once to an offscreen
@@ -98,6 +98,8 @@ export class CityMap {
       const i = CITY.sidewalk;
       g.fillRect(...rect(x0 + i, z0 + i, x0 + CITY.blockSize - i, z0 + CITY.blockSize - i));
     }
+    this.drawLots(g, size, s, rect);
+
     g.lineWidth = Math.max(1, 0.35 * s);
     g.strokeStyle = INK;
     const maxH = Math.max(...this.city.buildings.map((b) => b.height));
@@ -111,6 +113,38 @@ export class CityMap {
       const rr = rect(b.minX, b.minZ, b.maxX, b.maxZ);
       g.fillRect(...rr);
       g.strokeRect(...rr);
+    }
+  }
+
+  /** Parking lots: road-coloured with bay lines and a big "P" so they're easy to find. */
+  drawLots(g, size, s, rect) {
+    const i = CITY.sidewalk;
+    for (const { x0, z0 } of this.city.lots) {
+      g.fillStyle = ROAD;
+      g.fillRect(...rect(x0 + i, z0 + i, x0 + CITY.blockSize - i, z0 + CITY.blockSize - i));
+      for (const [a, b] of LOT.aisles) g.fillRect(...rect(x0, z0 + a, x0 + CITY.blockSize, z0 + b));
+      g.strokeStyle = 'rgba(238,234,224,0.7)';
+      g.lineWidth = Math.max(1, 0.2 * s);
+      g.beginPath();
+      for (const row of LOT.rows) {
+        for (let k = 0; k <= LOT.bays; k++) {
+          const [px, py] = this.toPx(x0 + LOT.x0 + k * LOT.bayWidth, z0 + row.z0, size);
+          g.moveTo(px, py), g.lineTo(px, py + (row.z1 - row.z0) * s);
+        }
+      }
+      g.stroke();
+      const [cx, cy] = this.toPx(x0 + CITY.blockSize / 2, z0 + CITY.blockSize / 2, size);
+      const r = 7 * s;
+      g.fillStyle = '#1f5fbf';
+      g.fillRect(cx - r, cy - r, r * 2, r * 2);
+      g.lineWidth = Math.max(1, 0.5 * s);
+      g.strokeStyle = '#ffffff';
+      g.strokeRect(cx - r, cy - r, r * 2, r * 2);
+      g.fillStyle = '#ffffff';
+      g.font = `bold ${Math.round(r * 1.6)}px sans-serif`;
+      g.textAlign = 'center';
+      g.textBaseline = 'middle';
+      g.fillText('P', cx, cy + r * 0.08);
     }
   }
 
