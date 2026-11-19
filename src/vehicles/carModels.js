@@ -51,27 +51,19 @@ export const MODELS = {
     tail: 0.92,
     paints: [0xa8aeb6, 0xf4f4f0, 0x3a3e45, 0x2f5fa8, 0xc62a2a, 0x17181c],
   },
-  // Classic late-80s mid-engine Italian supercar: low wedge with a short nose, the cabin pushed
-  // forward, a long flat engine deck and wide rear haunches; slatted strakes along each flank,
-  // a black slatted tail panel and five-spoke wheels. Rare in traffic, and far faster than
-  // anything else on the road.
-  classic: {
-    cfg: { length: 4.5, width: 2.15, maxSpeed: 58, engineAccel: 32, grip: 10 },
-    cabin: { rear: -0.31, roofRear: -0.13, roofFront: 0.03, front: 0.22, top: 0.94, width: 0.68 },
-    bodyH: 0.56,
+  // Modern mid-engine supercar: very low and wide, short nose, small cabin pushed forward with a
+  // long rear deck ending in a ducktail lip, and slim headlights. Rare in traffic, and far faster
+  // than anything else.
+  supercar: {
+    cfg: { length: 4.6, width: 2.15, maxSpeed: 58, engineAccel: 32, grip: 10 },
+    cabin: { rear: -0.32, roofRear: -0.16, roofFront: 0.0, front: 0.19, top: 0.86, width: 0.7 },
+    bodyH: 0.48,
     nose: 0.74,
-    tail: 0.97,
-    wheelR: 0.39,
-    wheelZ: 0.31,
-    wheelInset: 0.27,
-    paintBumpers: true,
-    slimLamps: true,
-    sideStrakes: true,
-    tailGrille: true,
-    deckLouvres: true,
-    starWheels: true,
-    paints: [0xd0101c, 0xd0101c, 0xd0101c, 0xd0101c, 0x111216, 0xf4f4f0, 0xffc414],
-    stripeChance: 0,
+    tail: 0.94,
+    lamp: [0.46, 0.08], // slim, swept headlights
+    ducktail: true,
+    paints: [0xf27a1a, 0x9bd43a, 0xffc414, 0xe0281e, 0x111216, 0xf4f4f0, 0x2f6fd0],
+    stripeChance: 0.25,
   },
   van: {
     cfg: { length: 5.0, width: 2.2, maxSpeed: 28, engineAccel: 15 },
@@ -120,7 +112,7 @@ const TRAFFIC_MIX = [
   ['sports', 8],
   ['golf', 10],
   ['police', 4],
-  ['classic', 1], // under 1% of traffic: a lucky find
+  ['supercar', 1], // under 1% of traffic: a lucky find
 ];
 export function randomModel(rng) {
   let r = rng.range(0, TRAFFIC_MIX.reduce((s, [, w]) => s + w, 0));
@@ -204,8 +196,6 @@ function geometryFor(name, m) {
     rim: new THREE.CylinderGeometry(R * 0.62, R * 0.62, 0.36, 14).rotateZ(Math.PI / 2),
     hubcap: new THREE.CylinderGeometry(R * 0.22, R * 0.22, 0.38, 8).rotateZ(Math.PI / 2),
     spoke: new THREE.BoxGeometry(0.37, R * 1.1, 0.07),
-    starSpoke: new THREE.BoxGeometry(0.39, R * 0.38, R * 0.3).translate(0, R * 0.3, 0),
-    wheelFace: new THREE.CylinderGeometry(R * 0.5, R * 0.5, 0.37, 14).rotateZ(Math.PI / 2),
   };
   for (const v of Object.values(g)) v.userData.shared = true;
   const info = { g, L, W, H, T, base, pts, cabinW, R };
@@ -361,59 +351,18 @@ export function buildCarMesh(name, color) {
 
   // --- Front & rear details ---
   const bumperY = 0.14;
+  add(g.bumper, S.dark, 0, bumperY, L / 2 - 0.05);
+  add(g.bumper, S.dark, 0, bumperY, -L / 2 + 0.05);
   const lampY = T - 0.2;
   const lampX = W / 2 - 0.42;
-  if (m.paintBumpers) {
-    // Bumpers moulded into the body: just a dark lower lip under each end.
-    add(plane(W * 0.5, 0.06), S.dark, 0, 0.06, L / 2 + 0.004, body, false);
-    add(plane(W * 0.7, 0.06), S.dark, 0, 0.06, -L / 2 - 0.004, body, false).rotation.y = Math.PI;
-  } else {
-    add(g.bumper, S.dark, 0, bumperY, L / 2 - 0.05);
-    add(g.bumper, S.dark, 0, bumperY, -L / 2 + 0.05);
-  }
-  const plateZ = m.paintBumpers ? L / 2 + 0.008 : L / 2 + 0.11;
-  add(plane(0.5, 0.12), S.plate, 0, bumperY + 0.02, plateZ, body, false); // number plates
-  add(plane(0.5, 0.12), S.plate, 0, bumperY + 0.02, -plateZ, body, false).rotation.y = Math.PI;
-  if (m.slimLamps) {
-    // Low nose: a wide black grille slot in the bumper flanked by slim driving lamps.
-    const ly = bumperY + 0.2;
-    add(plane(0.9, 0.12), S.grille, 0, ly, L / 2 + 0.006, body, false);
-    for (let k = 0; k < 3; k++) add(plane(0.86, 0.012), S.dark, 0, ly - 0.04 + k * 0.04, L / 2 + 0.009, body, false);
-    for (const s of [-1, 1]) {
-      add(new RoundedBoxGeometry(0.3, 0.1, 0.08, 2, 0.03), S.head, s * 0.66, ly, L / 2 - 0.14);
-      add(new THREE.BoxGeometry(0.12, 0.05, 0.05), S.indicator, s * 0.66, ly - 0.09, L / 2 - 0.15, body, false);
-    }
-  } else {
-    const frontFace = add(plane(lampX * 2 - 0.55, 0.16), S.grille, 0, lampY - 0.02, L / 2 + 0.01, body, false); // grille
-    frontFace.renderOrder = 0;
-    for (const s of [-1, 1]) {
-      add(g.lamp, S.head, s * lampX, lampY, L / 2 - 0.02);
-      add(new THREE.BoxGeometry(0.12, 0.08, 0.05), S.indicator, s * (W / 2 - 0.16), lampY, L / 2 - 0.12, body, false);
-    }
-  }
-  if (m.tailGrille) {
-    // Full-width black slatted panel across the tail with the lamps glowing through the gaps.
-    const tw = W * 0.82, th = 0.22;
-    add(plane(tw, th), tailMat, 0, lampY, -L / 2 - 0.004, body, false).rotation.y = Math.PI;
-    for (let k = 0; k < 5; k++) add(plane(tw + 0.02, 0.032), S.grille, 0, lampY - th / 2 + 0.016 + k * 0.047, -L / 2 - 0.008, body, false).rotation.y = Math.PI;
-  } else {
-    for (const s of [-1, 1]) add(g.lamp, tailMat, s * lampX, lampY, -L / 2 + 0.02);
-  }
-  if (m.sideStrakes) {
-    // Horizontal strakes in body colour over a dark intake, running from the door to the rear wheel.
-    const z0 = 0.13 * L, z1 = -(m.wheelZ ?? 0.3) * L + R + 0.12;
-    const len = z0 - z1, zc = (z0 + z1) / 2;
-    for (const s of [-1, 1]) {
-      const back = add(plane(len, 0.34), S.grille, s * (W / 2 + 0.006), 0.27, zc, body, false);
-      back.rotation.y = s * Math.PI / 2;
-      for (let k = 0; k < 5; k++) add(new THREE.BoxGeometry(0.06, 0.035, len + 0.04), paint, s * (W / 2 + 0.02), 0.13 + k * 0.07, zc);
-    }
-  }
-  if (m.deckLouvres) {
-    // Slots across the long engine deck behind the cabin, plus a small vent on the front lid.
-    const d0 = -L / 2 + 0.35, d1 = pts[0][0] - 0.12;
-    for (let k = 0; k < 5; k++) decalTop(W * 0.55, 0.05, S.grille, 0, T + 0.006, d0 + ((d1 - d0) * (k + 0.5)) / 5);
-    decalTop(0.5, 0.07, S.grille, 0, T + 0.006, pts[3][0] + 0.3);
+  const frontFace = add(plane(lampX * 2 - 0.55, 0.16), S.grille, 0, lampY - 0.02, L / 2 + 0.01, body, false); // grille
+  frontFace.renderOrder = 0;
+  add(plane(0.5, 0.12), S.plate, 0, bumperY + 0.02, L / 2 + 0.11, body, false); // number plates
+  add(plane(0.5, 0.12), S.plate, 0, bumperY + 0.02, -L / 2 - 0.11, body, false).rotation.y = Math.PI;
+  for (const s of [-1, 1]) {
+    add(g.lamp, S.head, s * lampX, lampY, L / 2 - 0.02);
+    add(g.lamp, tailMat, s * lampX, lampY, -L / 2 + 0.02);
+    add(new THREE.BoxGeometry(0.12, 0.08, 0.05), S.indicator, s * (W / 2 - 0.16), lampY, L / 2 - 0.12, body, false);
   }
 
   // --- Racing stripes (decals over hood / roof / trunk) ---
@@ -435,6 +384,10 @@ export function buildCarMesh(name, color) {
   if (m.spoiler) {
     for (const s of [-1, 1]) add(new THREE.BoxGeometry(0.08, 0.3, 0.12), S.dark, s * (W / 2 - 0.45), T + 0.14, -L / 2 + 0.3);
     add(new RoundedBoxGeometry(W * 0.78, 0.07, 0.36, 2, 0.03), paint, 0, T + 0.31, -L / 2 + 0.3);
+  }
+  if (m.ducktail) {
+    // Low lip along the trailing edge of the rear deck, in body colour.
+    add(new RoundedBoxGeometry(W * 0.86, 0.08, 0.28, 2, 0.03), paint, 0, T + 0.04, -L / 2 + 0.18);
   }
   if (m.roofSpoiler) {
     add(new RoundedBoxGeometry(cabinW + 0.04, 0.07, 0.34, 2, 0.03), roofPaint, 0, c.top + 0.09, c.roofRear * L - 0.08);
@@ -471,12 +424,11 @@ export function buildCarMesh(name, color) {
   // --- Wheels: pivot (steer) -> spin (roll) -> tyre, rim, hubcap, spoke ---
   const wheels = [];
   const wz = (m.wheelZ ?? 0.3) * L;
-  const wheelX = W / 2 - (m.wheelInset ?? 0.14); // larger inset tucks the tyres under the bodywork
   for (const [x, z, front] of [
-    [wheelX, wz, true],
-    [-wheelX, wz, true],
-    [wheelX, -wz, false],
-    [-wheelX, -wz, false],
+    [W / 2 - 0.14, wz, true],
+    [-W / 2 + 0.14, wz, true],
+    [W / 2 - 0.14, -wz, false],
+    [-W / 2 + 0.14, -wz, false],
   ]) {
     const pivot = new THREE.Group();
     pivot.position.set(x, R, z);
@@ -484,13 +436,7 @@ export function buildCarMesh(name, color) {
     pivot.add(spin);
     const tyre = new THREE.Mesh(g.tyre, S.tyre);
     tyre.castShadow = true;
-    if (m.starWheels) {
-      // Five silver spokes over a dark wheel face.
-      spin.add(tyre, new THREE.Mesh(g.rim, S.chrome), new THREE.Mesh(g.wheelFace, S.dark), new THREE.Mesh(g.hubcap, S.chrome));
-      for (let k = 0; k < 5; k++) spin.add(new THREE.Mesh(g.starSpoke, S.chrome).rotateX((k * 2 * Math.PI) / 5));
-    } else {
-      spin.add(tyre, new THREE.Mesh(g.rim, S.rim), new THREE.Mesh(g.hubcap, S.chrome), new THREE.Mesh(g.spoke, S.rim));
-    }
+    spin.add(tyre, new THREE.Mesh(g.rim, S.rim), new THREE.Mesh(g.hubcap, S.chrome), new THREE.Mesh(g.spoke, S.rim));
     root.add(pivot);
     wheels.push({ pivot, spin, front });
   }
