@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeometry.js';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { toon } from '../render/toon.js';
-import { bindPart, boneOf, rigMesh, usePalette, worldSkeleton } from '../render/skinBake.js';
+import { bindPart, boneOf, rigMesh, showBone, usePalette, worldSkeleton } from '../render/skinBake.js';
 
 /*
  * Car body styles. Cabin numbers are fractions of the car's length, measured along +Z (forward):
@@ -11,6 +11,9 @@ import { bindPart, boneOf, rigMesh, usePalette, worldSkeleton } from '../render/
  *   roofFront front edge of the roof
  *   front     where the windscreen meets the hood
  * `top` is the roof height above the body origin.
+ *
+ * Optional `damage` tunes how the model takes damage (hit points, engine position, or a custom
+ * list of damage states): see vehicles/damage.js. Models without one use the defaults.
  */
 const GENERAL = [0xf4f4f0, 0x24272e, 0x2f6fd0, 0x4caa3c, 0xd62b2b, 0xb7c0ca, 0x18a6a0, 0xf27a1a, 0x8a3fc4, 0x7a2430];
 
@@ -38,20 +41,21 @@ export const MODELS = {
     scoop: true,
     paints: [0xe0281e, 0xffc414, 0xf27a1a, 0x2f6fd0, 0x111216, 0xf4f4f0],
     stripeChance: 0.6,
+    damage: { hp: 600 }, // light and fragile
   },
-  // Compact European hatchback: short overhangs, long flat roof ending in a roof spoiler over an
-  // upright tailgate, thick C-pillars, and a slim black grille band joining the headlights.
-  golf: {
-    cfg: { length: 4.25, width: 1.95, maxSpeed: 36, engineAccel: 22 },
-    cabin: { rear: -0.445, roofRear: -0.39, roofFront: 0.03, front: 0.23, top: 1.08, width: 0.83 },
-    lamp: [0.5, 0.11], // slim, wide headlights
-    bPillar: true,
-    cPillar: 0.13, // painted C-pillar reaching this far (fraction of length) forward of the roof's rear edge
-    roofSpoiler: true,
-    grilleBand: true,
-    nose: 0.86,
-    tail: 0.92,
-    paints: [0xa8aeb6, 0xf4f4f0, 0x3a3e45, 0x2f5fa8, 0xc62a2a, 0x17181c],
+  // Modern mid-engine supercar: very low and wide, short nose, small cabin pushed forward with a
+  // long rear deck ending in a ducktail lip, and slim headlights. Rare in traffic, and far faster
+  // than anything else.
+  supercar: {
+    cfg: { length: 4.6, width: 2.15, maxSpeed: 58, engineAccel: 32, grip: 10 },
+    cabin: { rear: -0.32, roofRear: -0.16, roofFront: 0.0, front: 0.19, top: 0.86, width: 0.7 },
+    bodyH: 0.48,
+    nose: 0.74,
+    tail: 0.94,
+    lamp: [0.46, 0.08], // slim, swept headlights
+    ducktail: true,
+    paints: [0xf27a1a, 0x9bd43a, 0xffc414, 0xe0281e, 0x111216, 0xf4f4f0, 0x2f6fd0],
+    stripeChance: 0.25,
   },
   van: {
     cfg: { length: 5.0, width: 2.2, maxSpeed: 28, engineAccel: 15 },
@@ -62,6 +66,7 @@ export const MODELS = {
     nose: 0.9,
     tail: 0.98,
     paints: [0xf4f4f0, 0xb7c0ca, 0x2a4b7c, 0x6b4a32, 0x3f6b3a, 0xd9c79a],
+    damage: { hp: 950 },
   },
   pickup: {
     cfg: { length: 4.9, width: 2.1, maxSpeed: 31 },
@@ -72,6 +77,7 @@ export const MODELS = {
     nose: 0.88,
     tail: 0.96,
     paints: [0xb3261e, 0x2a4b7c, 0x3f6b3a, 0xc9a66b, 0x24272e, 0xf4f4f0],
+    damage: { hp: 900 },
   },
   taxi: {
     cfg: { length: 4.4, width: 2.0 },
@@ -87,6 +93,7 @@ export const MODELS = {
     lightbar: true,
     roofColor: 0xf4f4f0, // black-and-white livery
     paints: [0x17181c],
+    damage: { hp: 850 }, // reinforced for ramming
   },
 };
 
@@ -98,8 +105,8 @@ const TRAFFIC_MIX = [
   ['van', 12],
   ['pickup', 12],
   ['sports', 8],
-  ['golf', 10],
   ['police', 4],
+  ['supercar', 1], // about 1% of traffic: a lucky find
 ];
 export function randomModel(rng) {
   let r = rng.range(0, TRAFFIC_MIX.reduce((s, [, w]) => s + w, 0));
@@ -261,6 +268,15 @@ export function buildCarMesh(name, color) {
   const roofPaint = m.roofColor != null ? toon({ color: m.roofColor }) : paint;
   const stripeMat = toon({ color: 0xffffff });
   const tailMat = new THREE.MeshStandardMaterial({ color: 0x550000, emissive: 0xff1a1a, emissiveIntensity: 0.4 });
+  const headMat = S.head.clone(); // per car, so smashed headlights go dark on their own
+  headMat.userData = {};
+  // Parts that can be knocked off in a crash (see VehicleDamage.shedParts).
+  const loose = [];
+  const looseAdd = (...args) => {
+    const mesh = add(...args);
+    loose.push(mesh);
+    return mesh;
+  };
 
   const add = (geo, mat, x, y, z, parent = body, shadow = true) => {
     const mesh = new THREE.Mesh(geo, mat);
@@ -323,31 +339,21 @@ export function buildCarMesh(name, color) {
     streak.rotation.set(tilt, 0.35, 0, 'YXZ');
   }
 
-  // Thick painted C-pillars: solid panels over the rear of the glasshouse on each side.
-  if (m.cPillar) {
-    const fz = (c.roofRear + m.cPillar) * L;
-    const prof = [pts[0], pts[1], [fz, c.top], [fz - 0.25, base]];
-    const shape = new THREE.Shape(prof.map(([z, y]) => new THREE.Vector2(z, y)));
-    const geo = new THREE.ExtrudeGeometry(shape, { depth: 0.05, bevelEnabled: true, bevelThickness: 0.02, bevelSize: 0.02, bevelSegments: 1 });
-    geo.translate(0, 0, -0.025).rotateY(-Math.PI / 2);
-    for (const sx of [-1, 1]) add(geo, roofPaint, sx * (cabinW / 2 + 0.07), 0, 0);
-  }
-
   // Wing mirrors at the base of the A pillars.
-  for (const s of [-1, 1]) add(g.mirror, paint, s * (cabinW / 2 + 0.2), base + 0.12, pts[3][0] - 0.25);
+  for (const s of [-1, 1]) looseAdd(g.mirror, paint, s * (cabinW / 2 + 0.2), base + 0.12, pts[3][0] - 0.25);
 
   // --- Front & rear details ---
   const bumperY = 0.14;
-  add(g.bumper, S.dark, 0, bumperY, L / 2 - 0.05);
-  add(g.bumper, S.dark, 0, bumperY, -L / 2 + 0.05);
+  looseAdd(g.bumper, S.dark, 0, bumperY, L / 2 - 0.05);
+  looseAdd(g.bumper, S.dark, 0, bumperY, -L / 2 + 0.05);
   const lampY = T - 0.2;
   const lampX = W / 2 - 0.42;
   const frontFace = add(plane(lampX * 2 - 0.55, 0.16), S.grille, 0, lampY - 0.02, L / 2 + 0.01, body, false); // grille
   frontFace.renderOrder = 0;
-  add(plane(0.5, 0.12), S.plate, 0, bumperY + 0.02, L / 2 + 0.11, body, false); // number plates
-  add(plane(0.5, 0.12), S.plate, 0, bumperY + 0.02, -L / 2 - 0.11, body, false).rotation.y = Math.PI;
+  looseAdd(plane(0.5, 0.12), S.plate, 0, bumperY + 0.02, L / 2 + 0.11, body, false); // number plates
+  looseAdd(plane(0.5, 0.12), S.plate, 0, bumperY + 0.02, -L / 2 - 0.11, body, false).rotation.y = Math.PI;
   for (const s of [-1, 1]) {
-    add(g.lamp, S.head, s * lampX, lampY, L / 2 - 0.02);
+    add(g.lamp, headMat, s * lampX, lampY, L / 2 - 0.02);
     add(g.lamp, tailMat, s * lampX, lampY, -L / 2 + 0.02);
     add(new THREE.BoxGeometry(0.12, 0.08, 0.05), S.indicator, s * (W / 2 - 0.16), lampY, L / 2 - 0.12, body, false);
   }
@@ -370,21 +376,14 @@ export function buildCarMesh(name, color) {
   }
   if (m.spoiler) {
     for (const s of [-1, 1]) add(new THREE.BoxGeometry(0.08, 0.3, 0.12), S.dark, s * (W / 2 - 0.45), T + 0.14, -L / 2 + 0.3);
-    add(new RoundedBoxGeometry(W * 0.78, 0.07, 0.36, 2, 0.03), paint, 0, T + 0.31, -L / 2 + 0.3);
+    looseAdd(new RoundedBoxGeometry(W * 0.78, 0.07, 0.36, 2, 0.03), paint, 0, T + 0.31, -L / 2 + 0.3);
   }
-  if (m.roofSpoiler) {
-    add(new RoundedBoxGeometry(cabinW + 0.04, 0.07, 0.34, 2, 0.03), roofPaint, 0, c.top + 0.09, c.roofRear * L - 0.08);
-  }
-  if (m.grilleBand) {
-    // Slim black band running headlight to headlight, a chrome line through it and a round badge.
-    add(new RoundedBoxGeometry(lampX * 2 + 0.3, 0.13, 0.06, 2, 0.03), S.grille, 0, lampY, L / 2 - 0.03);
-    add(plane(lampX * 2 - 0.4, 0.025), S.chrome, 0, lampY + 0.02, L / 2 + 0.005, body, false);
-    add(new THREE.CylinderGeometry(0.08, 0.08, 0.04, 16).rotateX(Math.PI / 2), S.chrome, 0, lampY, L / 2 + 0.01);
-    // Wide lower intake in the bumper.
-    add(plane(W * 0.55, 0.1), S.grille, 0, bumperY + 0.06, L / 2 + 0.1, body, false);
+  if (m.ducktail) {
+    // Low lip along the trailing edge of the rear deck, in body colour.
+    add(new RoundedBoxGeometry(W * 0.86, 0.08, 0.28, 2, 0.03), paint, 0, T + 0.04, -L / 2 + 0.18);
   }
   if (m.taxiSign) {
-    add(new RoundedBoxGeometry(0.85, 0.26, 0.32, 2, 0.06), S.sign, 0, c.top + 0.25, roofZ);
+    looseAdd(new RoundedBoxGeometry(0.85, 0.26, 0.32, 2, 0.06), S.sign, 0, c.top + 0.25, roofZ);
   }
   let siren = null;
   if (m.lightbar) {
@@ -421,10 +420,13 @@ export function buildCarMesh(name, color) {
     tyre.castShadow = true;
     spin.add(tyre, new THREE.Mesh(g.rim, S.rim), new THREE.Mesh(g.hubcap, S.chrome), new THREE.Mesh(g.spoke, S.rim));
     root.add(pivot);
-    wheels.push({ pivot, spin, front });
+    wheels.push({ pivot, spin, front, tyre });
   }
 
-  const colors = bakeCar(name, root, [root, body, stripeGroup, ...wheels.map((w) => w.spin)], L, W);
+  // Loose parts and tyres can be hidden one by one (shed in a crash, burnt off), so each gets
+  // its own bone.
+  const toggles = [...loose, ...wheels.map((w) => w.tyre)];
+  const { colors, boneFor } = bakeCar(name, root, [root, body, stripeGroup, ...wheels.map((w) => w.spin)], toggles, L, W);
   return {
     root,
     body,
@@ -433,8 +435,10 @@ export function buildCarMesh(name, color) {
     stripeMat: colors(stripeMat),
     stripeGroup,
     tailMat,
-    wheels,
+    headMat,
+    wheels: wheels.map((w) => ({ ...w, tyre: boneFor(w.tyre) })),
     siren: siren && { red: colors(siren.red), blue: colors(siren.blue) },
+    loose: loose.map(boneFor),
   };
 }
 
@@ -447,11 +451,27 @@ const bakedCache = new Map();
  * Plain-colour toon parts share one mesh (two: shadow-casting or not), as do plain unlit
  * parts; their colours come from per-car palettes. Anything else (lamps, textures, the
  * transparent contact shadow) keeps its own material, one mesh per material.
- * Returns `colors(material)`: a `{ color }` stand-in for a merged material, so recolouring
- * (paint jobs, stripes, sirens) still works by setting `.color`.
+ *
+ * Each mesh in `toggles` gets a bone of its own standing in for it (`boneFor(mesh)`): setting
+ * the bone's `visible` shows / hides the part, and its `clone()` gives a real mesh of the part
+ * in its current colours (for debris).
+ *
+ * `colors(material)` gives a `{ color }` stand-in for a merged material, so recolouring
+ * (paint jobs, damage, stripes, sirens) still works by setting `.color`.
  */
-function bakeCar(name, root, bones, L, W) {
+function bakeCar(name, root, bones, toggles, L, W) {
   root.updateMatrixWorld(true);
+  const stand = new Map(); // toggle mesh -> its bone
+  for (const mesh of toggles) {
+    const bone = new THREE.Object3D();
+    bone.position.copy(mesh.position);
+    bone.quaternion.copy(mesh.quaternion);
+    bone.scale.copy(mesh.scale);
+    mesh.parent.add(bone);
+    bone.updateMatrixWorld();
+    stand.set(mesh, bone);
+    bones = [...bones, bone];
+  }
   const boneSet = new Set(bones);
   const isBone = (o) => boneSet.has(o);
   const toonSlots = new Map(); // material -> palette slot
@@ -479,7 +499,7 @@ function bakeCar(name, root, bones, L, W) {
     for (const [key, b] of buckets) {
       const uv = b.kind === 'own' && !!b.material.map;
       const geos = b.parts.map(({ mesh, slot }) => {
-        const bone = boneOf(mesh, isBone);
+        const bone = stand.get(mesh) ?? boneOf(mesh, isBone);
         return bindPart(mesh.geometry, mesh, bone, bones.indexOf(bone), slot, uv);
       });
       const geometry = mergeGeometries(geos);
@@ -505,9 +525,32 @@ function bakeCar(name, root, bones, L, W) {
     root.add(mesh);
   }
 
-  return (mat) => {
-    if (toonSlots.has(mat)) return { color: toonPalette[toonSlots.get(mat)] };
-    if (basicSlots.has(mat)) return { color: basicPalette[basicSlots.get(mat)] };
-    return mat;
+  // One stand-in per material, so parts sharing a material (e.g. paint and roof) stay the same object.
+  const standIns = new Map();
+  const colors = (mat) => {
+    if (!standIns.has(mat)) {
+      if (toonSlots.has(mat)) standIns.set(mat, { color: toonPalette[toonSlots.get(mat)] });
+      else if (basicSlots.has(mat)) standIns.set(mat, { color: basicPalette[basicSlots.get(mat)] });
+      else standIns.set(mat, mat);
+    }
+    return standIns.get(mat);
   };
+
+  for (const [mesh, bone] of stand) {
+    Object.defineProperty(bone, 'visible', {
+      get() {
+        return this.scale.x !== 0;
+      },
+      set(on) {
+        showBone(this, on);
+      },
+    });
+    bone.clone = () => {
+      const copy = mesh.clone();
+      const c = colors(mesh.material);
+      if (c !== mesh.material) (copy.material = mesh.material.clone()), copy.material.color.copy(c.color);
+      return copy;
+    };
+  }
+  return { colors, boneFor: (mesh) => stand.get(mesh) };
 }

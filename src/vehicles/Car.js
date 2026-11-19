@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { MODELS, buildCarMesh } from './carModels.js';
 import { offIsland, WATER_Y } from '../world/City.js';
 import { showBone } from '../render/skinBake.js';
+import { VehicleDamage } from './damage.js';
 
 const GRAVITY = 25; // m/s² (a touch heavy, so falls read well from the high camera)
 const SINK_DEPTH = -5; // how far a car sinks before settling on the seabed
@@ -10,6 +11,7 @@ let nextId = 1;
 const _fwd = new THREE.Vector2();
 const _right = new THREE.Vector2();
 const _prevVel = new THREE.Vector2();
+const WRECKED = { throttle: 0, steer: 0, handbrake: false };
 
 const DEFAULTS = {
   engineAccel: 20, // m/s² at full throttle
@@ -66,13 +68,32 @@ export class Car {
     this.mesh = parts.root;
     this.body = parts.body;
     this.paint = parts.paint;
+    this.roofPaint = parts.roofPaint;
     this.stripeMat = parts.stripeMat;
     this.stripeGroup = parts.stripeGroup;
     this.tailMat = parts.tailMat;
+    this.headMat = parts.headMat;
     this.wheels = parts.wheels;
+    this.loose = parts.loose; // parts that can fall off in a crash
     this.sirenMats = parts.siren; // null unless the model has a lightbar
     this.siren = false; // flashing lights on (police in pursuit)
+    // Undamaged colours: damage tints from these (see VehicleDamage.refreshLook).
+    this.baseColor = this.paint.color.clone();
+    this.baseRoofColor = this.roofPaint.color.clone();
+    this.baseStripeColor = this.stripeMat.color.clone();
+    // Every vehicle can be damaged; the model's `damage` entry tunes it (see vehicles/damage.js).
+    this.damage = new VehicleDamage(this, m.damage);
     this.setStripes(stripes);
+  }
+
+  /** Burnt-out shell: can't be driven or entered. */
+  get wrecked() {
+    return this.damage.destroyed;
+  }
+
+  /** Good as new: full health, all parts back on, fresh paint. */
+  repair() {
+    this.damage.repair();
   }
 
   get speed() {
@@ -116,7 +137,8 @@ export class Car {
   }
 
   setColor(color) {
-    this.paint.color.set(color);
+    this.baseColor.set(color);
+    this.damage?.refreshLook();
   }
 
   /** New random paint job from this model's palette (used when traffic respawns). */
@@ -135,7 +157,8 @@ export class Car {
   /** Twin racing stripes over hood, roof and trunk; pass null to remove. */
   setStripes(color) {
     showBone(this.stripeGroup, color != null);
-    if (color != null) this.stripeMat.color.set(color);
+    if (color != null) this.baseStripeColor.set(color);
+    this.damage?.refreshLook();
   }
 
   /** Turning ability (0..1) at a given forward speed: none when stopped, slightly less when fast. */
@@ -169,8 +192,14 @@ export class Car {
    */
   update(dt, controls, world) {
     if (!this.overboard && offIsland(this.position.x, this.position.y)) this.overboard = true;
+    this.damage.update(dt);
     if (this.overboard) return this.#fall(dt);
     const c = this.cfg;
+    // Damage saps the engine and steering; a wreck gets no input at all.
+    const dmg = this.damage.state;
+    if (dmg.destroyed) controls = WRECKED;
+    const maxSpeed = c.maxSpeed * Math.max(0.05, dmg.power);
+    const engineAccel = c.engineAccel * dmg.power;
     // The pre-turn frame, held through the step (copies: the cached vectors follow the heading).
     const fwd = _fwd.copy(this.forward);
     const right = _right.copy(this.right);
@@ -188,14 +217,14 @@ export class Car {
         vF += c.brakeDecel * controls.throttle * dt;
         this.braking = true;
       } else {
-        vF += c.engineAccel * controls.throttle * (1 - Math.max(0, vF) / c.maxSpeed) * dt * 1.6;
+        vF += engineAccel * controls.throttle * (1 - Math.max(0, vF) / maxSpeed) * dt * 1.6;
       }
     } else if (controls.throttle < 0) {
       if (vF > 0.5) {
         vF -= c.brakeDecel * -controls.throttle * dt;
         this.braking = true;
       } else {
-        vF -= c.reverseAccel * -controls.throttle * dt;
+        vF -= c.reverseAccel * dmg.power * -controls.throttle * dt;
       }
     }
 
@@ -208,7 +237,8 @@ export class Car {
       vF = Math.abs(vF) <= hb ? 0 : vF - Math.sign(vF) * hb;
       this.braking = true;
     }
-    vF = THREE.MathUtils.clamp(vF, -c.maxReverse, c.maxSpeed);
+    if (dmg.destroyed) vF *= Math.exp(-2.5 * dt); // burnt tyres: it scrapes to a halt
+    vF = THREE.MathUtils.clamp(vF, -c.maxReverse, Math.max(maxSpeed, c.maxSpeed * 0.3));
 
     // --- Lateral grip (low grip under handbrake = drift) ---
     const grip = controls.handbrake ? c.handbrakeGrip : c.grip;
@@ -218,7 +248,7 @@ export class Car {
     this.steer += (controls.steer - this.steer) * Math.min(1, c.steerResponse * dt);
     // Need some speed to turn; turning gets a little less sharp at high speed.
     const drift = controls.handbrake ? 1.35 : 1;
-    this.heading += this.steer * c.steerRate * this.speedFactor(vF) * drift * Math.sign(vF) * dt;
+    this.heading += this.steer * c.steerRate * dmg.steer * this.speedFactor(vF) * drift * Math.sign(vF) * dt;
     this.heading += this.yawRate * dt;
     this.yawRate *= Math.exp(-3 * dt);
 
@@ -266,6 +296,7 @@ export class Car {
     const fwd = this.forward;
     const offset = c.length / 2 - c.collisionRadius;
     const r = c.collisionRadius;
+    let worst = 0; // hardest hit this step (m/s into the wall)
 
     for (let iter = 0; iter < 3; iter++) {
       let hit = false;
@@ -299,6 +330,7 @@ export class Car {
 
           const vn = this.velocity.x * nx + this.velocity.y * nz;
           if (vn < 0) {
+            worst = Math.max(worst, -vn);
             // Remove (and slightly bounce) the into-wall component, scrub some tangential speed.
             this.velocity.x -= (1 + c.restitution) * vn * nx;
             this.velocity.y -= (1 + c.restitution) * vn * nz;
@@ -312,23 +344,27 @@ export class Car {
       }
       if (!hit) break;
     }
+    if (worst > 0) this.damage.impact(worst * (1 + c.restitution));
   }
 
   /** Copy physics state onto the Three.js mesh. Call once per rendered frame. */
   syncMesh() {
-    this.mesh.position.set(this.position.x, this.y, this.position.y);
+    const d = this.damage;
+    // A burnt-out shell sits down on its rims; explosions throw the car up.
+    this.mesh.position.set(this.position.x, this.y + d.hop - (d.destroyed ? 0.15 : 0), this.position.y);
     this.mesh.rotation.y = this.heading;
-    this.body.rotation.set(this.bodyPitch, 0, this.bodyRoll);
+    this.body.rotation.set(this.bodyPitch + d.sag.pitch, 0, this.bodyRoll + d.sag.roll);
     for (const w of this.wheels) {
       w.spin.rotation.x = this.wheelSpin;
       if (w.front) w.pivot.rotation.y = this.steer * 0.5;
     }
-    this.tailMat.emissiveIntensity = this.braking ? 2.2 : 0.4;
+    this.tailMat.emissiveIntensity = d.destroyed ? 0 : this.braking ? 2.2 : 0.4;
     if (this.sirenMats) {
       // Alternate red / blue with a quick double-flash; dim and steady when off.
       const t = performance.now() / 1000 + this.id * 0.37;
       const phase = (t * 2.5) % 1;
       const flash = (k) => this.siren && phase > k && phase < k + 0.5 && (phase - k) % 0.25 < 0.17;
+      if (d.destroyed) this.siren = false;
       this.sirenMats.red.color.setHex(flash(0) ? 0xff3040 : this.siren ? 0x4a0a10 : 0xa01820);
       this.sirenMats.blue.color.setHex(flash(0.5) ? 0x4a8cff : this.siren ? 0x0a1440 : 0x1c3ea8);
     }

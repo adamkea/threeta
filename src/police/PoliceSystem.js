@@ -342,6 +342,7 @@ export class PoliceSystem {
         car = new Car({ model: 'police' });
         this.scene.add(car.mesh);
       }
+      car.repair();
       car.reset(x, z, headingOf(d), 12);
       this.#enlist(car);
       return true;

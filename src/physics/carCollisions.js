@@ -5,9 +5,16 @@ const _cb = new Float64Array(4);
 /**
  * Resolves car-vs-car overlaps (each car = two circles) with an equal-mass impulse,
  * plus a bit of spin so glancing hits rotate the cars. `onHit(a, b, impulse)` is told about
- * every impact (used to spot the player ramming police). `grid` is a SpatialHash of `cars`.
+ * every impact (used to spot the player ramming police). Both cars take crash damage from the
+ * hardest hit each suffered this step (see VehicleDamage.impact). `grid` is a SpatialHash of `cars`.
  */
+const hardest = new Map(); // car -> { dv, by }
 export function resolveCarCollisions(cars, grid, restitution = 0.3, onHit = null) {
+  hardest.clear();
+  const note = (car, dv, by) => {
+    const h = hardest.get(car);
+    if (!h || dv > h.dv) hardest.set(car, { dv, by });
+  };
   for (const a of cars) {
     // Each nearby pair once (lower id handles it). Cars move < 1 m between the grid rebuild and
     // here, hence the margin on the 6 m pair range.
@@ -41,6 +48,8 @@ export function resolveCarCollisions(cars, grid, restitution = 0.3, onHit = null
           b.velocity.x += nx * jImp;
           b.velocity.y += nz * jImp;
           onHit?.(a, b, jImp);
+          note(a, jImp, b);
+          note(b, jImp, a);
 
           // Torque about +Y: tau = lz*Fx - lx*Fz, with lever from car centre to contact.
           const cx = (ax + bx) / 2;
@@ -52,4 +61,5 @@ export function resolveCarCollisions(cars, grid, restitution = 0.3, onHit = null
       }
     }
   }
+  for (const [car, { dv, by }] of hardest) car.damage.impact(dv, by);
 }

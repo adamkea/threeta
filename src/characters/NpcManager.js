@@ -49,6 +49,13 @@ export class NpcManager {
     for (let k = 0; k < this.count; k++) this.#trySpawn(focus, 6, this.spawnMax, 30);
   }
 
+  /** After the player is moved across the city: drop people left far behind and fill in the new area. */
+  repopulate(focus) {
+    this.manage(0, focus);
+    const live = this.npcs.filter((n) => n.active).length;
+    for (let k = live; k < this.count; k++) this.#trySpawn(focus, 6, this.spawnMax, 30);
+  }
+
   /** Spawn a panicked ex-driver at (x, z) who runs away from `threat` and from the car they left. */
   spawnFleeing(x, z, threat, car) {
     const n = this.#acquire({ role: 'civilian', gang: null, look: civilianLook(this.rng) });
