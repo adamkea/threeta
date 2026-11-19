@@ -296,7 +296,9 @@ function buildBlock(rng, x0, z0, downtown, walls, roofs, colliders, buildings) {
   const lot = CITY.blockSize - inset * 2;
   const cols = rng.int(1, 3);
   const rows = rng.int(1, 3);
-  const gap = 1.5;
+  // Alleys between buildings: ~6m, like a real single-lane service alley — room for a car
+  // (about 2m wide) to drive through with space either side, or for people to cut through.
+  const gap = 6;
   const cw = (lot - gap * (cols - 1)) / cols;
   const rw = (lot - gap * (rows - 1)) / rows;
 
