@@ -2,8 +2,8 @@ import { CITY } from '../world/City.js';
 import { DIRS, isValidNode, nodeX } from '../traffic/RoadNetwork.js';
 import { clearLine } from './sight.js';
 
-const DIRECT_RANGE = 45; // closer than this with a clear view: drive straight at the target
-const CORNER_SPEED = 12; // m/s through a turn at a junction
+const DIRECT_RANGE = 35; // closer than this with a clear view: drive straight at the target
+const CORNER_SPEED = 10; // m/s through a turn at a junction
 const BRAKE = 14; // m/s² used to plan slowing for corners
 
 /** Index of the road line nearest to a coordinate. */
@@ -42,7 +42,7 @@ export class PursuitDriver {
     let cornerLimit = Infinity;
     if (this.direct) {
       // Lead the target a little so we cut it off instead of trailing behind.
-      const lead = Math.min(0.8, dist / 25);
+      const lead = Math.min(0.3, dist / 40);
       ax = tp.x + target.velocity.x * lead;
       az = tp.y + target.velocity.y * lead;
       this.node = null;
@@ -95,7 +95,7 @@ export class PursuitDriver {
       return { throttle: -1, steer: this.reverseSteer, handbrake: false };
     }
 
-    const steer = Math.max(-1, Math.min(1, angle * 2.2));
+    const steer = Math.max(-1, Math.min(1, angle * 1.6));
     let throttle;
     const err = desired - vF;
     if (err > 0) throttle = Math.min(1, 0.3 + err * 0.3);
