@@ -1,88 +1,6 @@
 import * as THREE from 'three';
-import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeometry.js';
-import { toon } from '../render/toon.js';
+import { MODELS, buildCarMesh } from './carModels.js';
 
-/**
- * Lower body seen from above: a rounded, slightly coke-bottle outline with a tapered nose,
- * extruded upward and bevelled so every top edge is soft.
- */
-function bodyGeometry(L, W) {
-  const b = 0.12; // bevel radius
-  const hl = L / 2 - b;
-  const hw = W / 2 - b;
-  const nose = hw * 0.8, tail = hw * 0.9, r = 0.45;
-  // Shape is drawn in (x, -z) so it lands the right way round after rotating.
-  const s = new THREE.Shape();
-  s.moveTo(-nose + r, -hl);
-  s.lineTo(nose - r, -hl);
-  s.quadraticCurveTo(nose, -hl, nose + 0.05, -hl + r);
-  s.quadraticCurveTo(hw, -hl * 0.55, hw, -hl * 0.3); // front wheel arch bulge
-  s.quadraticCurveTo(hw - 0.06, 0, hw, hl * 0.4); // slight waist
-  s.lineTo(tail + 0.05, hl - r);
-  s.quadraticCurveTo(tail, hl, tail - r, hl);
-  s.lineTo(-tail + r, hl);
-  s.quadraticCurveTo(-tail, hl, -tail - 0.05, hl - r);
-  s.lineTo(-hw, hl * 0.4);
-  s.quadraticCurveTo(-hw + 0.06, 0, -hw, -hl * 0.3);
-  s.quadraticCurveTo(-hw, -hl * 0.55, -nose - 0.05, -hl + r);
-  s.quadraticCurveTo(-nose, -hl, -nose + r, -hl);
-  const height = 0.62 - 2 * b;
-  const g = new THREE.ExtrudeGeometry(s, {
-    depth: height,
-    bevelEnabled: true,
-    bevelThickness: b,
-    bevelSize: b,
-    bevelSegments: 4,
-    curveSegments: 8,
-  });
-  g.rotateX(-Math.PI / 2).translate(0, -height / 2, 0); // centred like a 0.62-tall box
-  g.computeVertexNormals();
-  return g;
-}
-
-// Geometry is shared between every car of the same size (traffic pools lots of them).
-const geoCache = new Map();
-function carGeometry(L, W) {
-  const key = `${L}x${W}`;
-  if (geoCache.has(key)) return geoCache.get(key);
-
-  // Cabin: side profile with raked windscreen and rear window, extruded across the car and bevelled.
-  const rear = -L * 0.33, front = L * 0.22, roofRear = -L * 0.24, roofFront = L * 0.08;
-  const shape = new THREE.Shape();
-  shape.moveTo(rear, 0.58);
-  shape.lineTo(roofRear, 1.1);
-  shape.lineTo(roofFront, 1.1);
-  shape.lineTo(front, 0.58);
-  shape.closePath();
-  const cabinW = W * 0.8;
-  const cabin = new THREE.ExtrudeGeometry(shape, {
-    depth: cabinW,
-    bevelEnabled: true,
-    bevelThickness: 0.08,
-    bevelSize: 0.08,
-    bevelSegments: 3,
-    curveSegments: 1,
-  });
-  cabin.translate(0, 0, -cabinW / 2).rotateY(-Math.PI / 2); // profile x -> car z
-
-  const g = {
-    body: bodyGeometry(L, W),
-    cabin,
-    roof: new RoundedBoxGeometry(cabinW + 0.1, 0.1, roofFront - roofRear + 0.1, 2, 0.05),
-    roofZ: (roofFront + roofRear) / 2,
-    roofLen: roofFront - roofRear,
-    bumper: new RoundedBoxGeometry(W * 0.96, 0.22, 0.3, 2, 0.1),
-    tyre: new THREE.CylinderGeometry(0.4, 0.4, 0.32, 18).rotateZ(Math.PI / 2),
-    hub: new THREE.CylinderGeometry(0.22, 0.22, 0.34, 10).rotateZ(Math.PI / 2),
-    lamp: new RoundedBoxGeometry(0.45, 0.18, 0.08, 2, 0.04),
-    windscreen: { z: (roofFront + front) / 2, y: 0.84, tilt: Math.atan2(0.52, front - roofFront) },
-  };
-  for (const v of Object.values(g)) if (v.isBufferGeometry) v.userData.shared = true;
-  geoCache.set(key, g);
-  return g;
-}
-
-// Tunable handling parameters (SI-ish units: metres, seconds).
 let nextId = 1;
 
 const DEFAULTS = {
@@ -109,8 +27,13 @@ const DEFAULTS = {
  * Heading 0 faces +Z. Forward vector = (sin h, cos h).
  */
 export class Car {
-  constructor({ color = 0xd23b2f, stripes = null, ...opts } = {}) {
-    this.cfg = { ...DEFAULTS, ...opts };
+  constructor({ model = 'sedan', color, stripes = null, ...opts } = {}) {
+    this.modelName = model;
+    this.model = MODELS[model];
+    const m = this.model;
+    // Base performance for this body style (traffic AI detunes it; see restorePerformance).
+    this.perf = { ...DEFAULTS, ...m.cfg, collisionRadius: m.cfg.width / 2 + 0.05 };
+    this.cfg = { ...this.perf, ...opts };
     this.position = new THREE.Vector2(0, 0); // x, z
     this.velocity = new THREE.Vector2(0, 0);
     this.heading = 0;
@@ -124,7 +47,14 @@ export class Car {
     this.wheelSpin = 0;
     this.bodyRoll = 0;
     this.bodyPitch = 0;
-    this.mesh = this.#buildMesh(color);
+    const parts = buildCarMesh(model, color ?? m.paints[0]);
+    this.mesh = parts.root;
+    this.body = parts.body;
+    this.paint = parts.paint;
+    this.stripeMat = parts.stripeMat;
+    this.stripeGroup = parts.stripeGroup;
+    this.tailMat = parts.tailMat;
+    this.wheels = parts.wheels;
     this.setStripes(stripes);
   }
 
@@ -150,6 +80,19 @@ export class Car {
 
   setColor(color) {
     this.paint.color.set(color);
+  }
+
+  /** New random paint job from this model's palette (used when traffic respawns). */
+  respray(rng) {
+    this.setColor(rng.pick(this.model.paints));
+    const sc = this.model.stripeChance ?? 0;
+    this.setStripes(rng.chance(sc) ? rng.pick([0xffffff, 0x111111]) : null);
+  }
+
+  /** Undo AI detuning (e.g. once the player hijacks it). */
+  restorePerformance() {
+    this.cfg.engineAccel = this.perf.engineAccel;
+    this.cfg.maxSpeed = this.perf.maxSpeed;
   }
 
   /** Twin racing stripes over hood, roof and trunk; pass null to remove. */
@@ -318,86 +261,5 @@ export class Car {
       if (w.front) w.pivot.rotation.y = this.steer * 0.5;
     }
     this.tailMat.emissiveIntensity = this.braking ? 2.2 : 0.4;
-  }
-
-  #buildMesh(color) {
-    const root = new THREE.Group();
-    const body = new THREE.Group();
-    body.position.y = 0.45;
-    root.add(body);
-    this.body = body;
-
-    const { length: L, width: W } = this.cfg;
-    const G = carGeometry(L, W);
-    const paint = (this.paint = toon({ color }));
-    const dark = toon({ color: 0x1c1f26 });
-    const glass = toon({ color: 0x1d2a3d });
-    const glint = new THREE.MeshBasicMaterial({ color: 0x9cc4e8 });
-    const add = (geo, mat, x, y, z, parent = body) => {
-      const m = new THREE.Mesh(geo, mat);
-      m.position.set(x, y, z);
-      m.castShadow = true;
-      parent.add(m);
-      return m;
-    };
-
-    add(G.body, paint, 0, 0.3, 0); // lower body
-    add(G.cabin, glass, 0, 0, 0); // glasshouse
-    add(G.roof, paint, 0, 1.17, G.roofZ); // painted roof panel
-    add(G.bumper, dark, 0, 0.14, L / 2 - 0.05);
-    add(G.bumper, dark, 0, 0.14, -L / 2 + 0.05);
-    // Windscreen highlight streak — reads as glass from the high camera.
-    const ws = G.windscreen;
-    // Flat decals (no side faces) so the ink pass doesn't outline them.
-    const decal = (w, len) => new THREE.PlaneGeometry(w, len).rotateX(-Math.PI / 2);
-    const streak = add(decal(W * 0.45, 0.1), glint, -0.1, ws.y + 0.12, ws.z + 0.1);
-    streak.rotation.set(ws.tilt, 0.35, 0, 'YXZ');
-    streak.castShadow = false;
-
-    this.stripeMat = toon({ color: 0xffffff });
-    this.stripeGroup = new THREE.Group();
-    body.add(this.stripeGroup);
-    const hoodLen = L / 2 - 0.3 - (L * 0.22 + 0.1);
-    const trunkLen = -L * 0.33 - 0.1 - (-L / 2 + 0.3);
-    for (const sx of [-0.24, 0.24]) {
-      const st = (len, y, z) => {
-        const m = add(decal(0.26, len), this.stripeMat, sx, y, z, this.stripeGroup);
-        m.castShadow = false;
-      };
-      st(hoodLen, 0.615, L / 2 - 0.3 - hoodLen / 2); // hood
-      st(G.roofLen, 1.226, G.roofZ); // roof
-      st(trunkLen, 0.615, -L / 2 + 0.3 + trunkLen / 2); // trunk
-    }
-
-    const headMat = new THREE.MeshStandardMaterial({ color: 0xffffee, emissive: 0xfff6cc, emissiveIntensity: 1 });
-    this.tailMat = new THREE.MeshStandardMaterial({ color: 0x550000, emissive: 0xff1a1a, emissiveIntensity: 0.4 });
-    for (const s of [-1, 1]) {
-      add(G.lamp, headMat, s * (W / 2 - 0.4), 0.42, L / 2 - 0.02);
-      add(G.lamp, this.tailMat, s * (W / 2 - 0.4), 0.42, -L / 2 + 0.02);
-    }
-
-    // Wheels: pivot (steering) -> spin (rolling) -> tyre mesh
-    this.wheels = [];
-    const tyreMat = toon({ color: 0x15161a });
-    const hubMat = toon({ color: 0xc8ccd4 });
-    for (const [x, z, front] of [
-      [W / 2 - 0.14, L * 0.3, true],
-      [-W / 2 + 0.14, L * 0.3, true],
-      [W / 2 - 0.14, -L * 0.3, false],
-      [-W / 2 + 0.14, -L * 0.3, false],
-    ]) {
-      const pivot = new THREE.Group();
-      pivot.position.set(x, 0.4, z);
-      const spin = new THREE.Group();
-      pivot.add(spin);
-      const tyre = new THREE.Mesh(G.tyre, tyreMat);
-      tyre.castShadow = true;
-      // Spoke bar on the hub so the wheel visibly rolls.
-      const spoke = new THREE.Mesh(new THREE.BoxGeometry(0.36, 0.3, 0.06), hubMat);
-      spin.add(tyre, new THREE.Mesh(G.hub, hubMat), spoke);
-      root.add(pivot);
-      this.wheels.push({ pivot, spin, front });
-    }
-    return root;
   }
 }
