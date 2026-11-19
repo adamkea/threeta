@@ -117,14 +117,17 @@ export class CityMap {
     this.drawLandmarks(g, size, s);
   }
 
-  /** Police station (blue badge with a star) and hospital (white badge with a red cross). */
+  /**
+   * Police station (blue badge with a star), hospital (white badge with a red cross) and gun
+   * shop (dark badge with a gold crosshair).
+   */
   drawLandmarks(g, size, s) {
     for (const { kind, footprint: f } of this.city.landmarks) {
       const [cx, cy] = this.toPx((f.minX + f.maxX) / 2, (f.minZ + f.maxZ) / 2, size);
       const r = 8 * s;
       g.beginPath();
       g.arc(cx, cy, r, 0, Math.PI * 2);
-      g.fillStyle = kind === 'police' ? '#22385c' : '#ffffff';
+      g.fillStyle = kind === 'police' ? '#22385c' : kind === 'gunshop' ? '#26354d' : '#ffffff';
       g.fill();
       g.lineWidth = Math.max(1.5, 0.6 * s);
       g.strokeStyle = INK;
@@ -139,6 +142,14 @@ export class CityMap {
         }
         g.closePath();
         g.fill();
+      } else if (kind === 'gunshop') {
+        g.strokeStyle = '#f2c230';
+        g.lineWidth = Math.max(1.5, 0.45 * s);
+        g.beginPath();
+        g.arc(cx, cy, r * 0.5, 0, Math.PI * 2);
+        g.moveTo(cx, cy - r * 0.8), g.lineTo(cx, cy + r * 0.8);
+        g.moveTo(cx - r * 0.8, cy), g.lineTo(cx + r * 0.8, cy);
+        g.stroke();
       } else {
         const t = r * 0.42, l = r * 1.3;
         g.fillStyle = '#d23a2f';

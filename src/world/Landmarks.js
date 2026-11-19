@@ -13,25 +13,32 @@ import { toon } from '../render/toon.js';
 export const LANDMARK_BLOCKS = [
   { kind: 'police', bx: 2, bz: 4 },
   { kind: 'hospital', bx: 5, bz: 2 },
+  { kind: 'gunshop', bx: 3, bz: 4 },
 ];
+
+const BUILDERS = { police: policeStation, hospital, gunshop: gunShop };
 
 /**
  * Builds one landmark centred on (cx, cz) with its ground floor at height y0.
- * Adds its solid parts to `colliders` and returns { kind, name, group, respawn, footprint, color }.
- * `respawn` is where the player reappears: { x, z, heading }, outside the front door.
+ * Adds its solid parts to `colliders` and returns { kind, name, group, respawn, footprint, color,
+ * buildings, entrance }. `respawn` is where the player reappears: { x, z, heading }, outside the
+ * front door. `buildings` are any extra footprints on the block (for the map). `entrance`, for
+ * buildings you can walk into, is the spot on the pavement in front of the door: { x, z, heading }.
  */
 export function createLandmark(kind, cx, cz, y0, { colliders, windowTex }) {
   const b = new Builder(cx, cz, colliders, windowTex);
-  const spec = kind === 'police' ? policeStation(b) : hospital(b);
+  const spec = BUILDERS[kind](b);
   b.group.position.set(cx, y0, cz);
-  const [minX, minZ, maxX, maxZ] = spec.footprint;
+  const rect = ([minX, minZ, maxX, maxZ]) => ({ minX: cx + minX, maxX: cx + maxX, minZ: cz + minZ, maxZ: cz + maxZ });
   return {
     kind,
     name: spec.name,
     group: b.group,
     respawn: { x: cx + spec.respawn[0], z: cz + spec.respawn[1], heading: 0 },
-    footprint: { minX: cx + minX, maxX: cx + maxX, minZ: cz + minZ, maxZ: cz + maxZ, height: spec.height },
+    footprint: { ...rect(spec.footprint), height: spec.height },
     color: spec.color,
+    buildings: (spec.buildings ?? []).map(({ rect: r, height, color }) => ({ ...rect(r), height, color })),
+    entrance: spec.entrance ? { x: cx + spec.entrance[0], z: cz + spec.entrance[1], heading: 0 } : null,
   };
 }
 
@@ -93,6 +100,78 @@ function hospital(b) {
   return { name: 'Hospital', footprint: [-16.3, -16.3, 16.3, 1.3], height: H, color: WHITE, respawn: [0, 11] };
 }
 
+/**
+ * A gun shop in a row of ordinary buildings: a squat two-storey storefront with display windows,
+ * a striped awning and a big sign, and a glowing marker on the pavement at its door. The
+ * interior is a separate set (see interiors/GunShopInterior.js) that you're taken into.
+ */
+function gunShop(b) {
+  const SHOP = 0x2f4a3a; // dark gunmetal green
+  const TRIM = 0xd8b45a;
+  const BRICK = 0xb2473a;
+  const SAND = 0xd9d1bf;
+  const H = 6.4;
+
+  // Neighbours: a tall block behind, lower ones either side, so the shop sits in a terrace.
+  b.facade(-17, -17, 17, -5, 0, 15, SAND, { solid: true });
+  b.box(-17.2, -17.2, 17.2, -4.8, 15, 15.6, 0x9d968a);
+  b.facade(-17, -5, -9.2, 11, 0, 9, BRICK, { solid: true });
+  b.box(-17.2, -5, -9, 11.2, 9, 9.5, 0x8c3a30);
+  b.facade(9.2, -5, 17, 11, 0, 12, 0x7f9fb6, { solid: true });
+  b.box(9, -5, 17.2, 11.2, 12, 12.5, 0x66808f);
+
+  // The shop: plain ground floor (it's all shopfront), windows upstairs, a gold cornice.
+  b.box(-9, -5, 9, 9, 0, 3.4, SHOP, { solid: true });
+  b.facade(-9, -5, 9, 9, 3.4, H, SHOP);
+  b.box(-9.2, -5.2, 9.2, 9.2, H, H + 0.4, 0x5a5c60); // flat roof
+  b.box(-9.3, 9, 9.3, 9.35, H - 0.4, H + 0.55, TRIM); // gold cornice along the front
+  b.decal(0, 2, 11, 11, crosshairBadge(), H + 0.41);
+
+  // Shopfront: dark display windows either side of a glass door in a gold frame.
+  for (const [x0, x1] of [[-8, -2], [2, 8]]) {
+    b.box(x0, 9, x1, 9.12, 0.6, 2.9, 0x26354d);
+    b.box(x0 - 0.15, 9, x1 + 0.15, 9.2, 0.45, 0.6, TRIM);
+  }
+  b.box(-1.5, 9, 1.5, 9.2, 0, 2.9, TRIM);
+  b.box(-1.1, 9.1, 1.1, 9.25, 0, 2.6, 0x1d2a3d);
+  // Window lettering, standing just proud of the glass.
+  b.sign(-7.6, 9.12, -2.4, 9.16, 1.3, 2.2, signFace('AMMO', '#26354d', '#f2c230'));
+  b.sign(2.4, 9.12, 7.6, 9.16, 1.3, 2.2, signFace('ARMS', '#26354d', '#f2c230'));
+
+  // Striped awning over the whole front, the shop sign above it.
+  b.box(-9, 9, 9, 10.6, 3.0, 3.35, 0, { material: b.awning() });
+  b.sign(-7.5, 9, 7.5, 9.5, 3.7, 5.9, signFace('LOCK & LOAD', '#c8141c', '#ffffff'));
+
+  // Door marker: a glowing ring on the pavement with an arrow bobbing over it (animated by Shops).
+  const marker = new THREE.Group();
+  const ring = new THREE.Mesh(
+    new THREE.RingGeometry(0.55, 0.8, 32).rotateX(-Math.PI / 2),
+    new THREE.MeshBasicMaterial({ color: 0xffd23a, transparent: true, opacity: 0.85 }),
+  );
+  ring.position.y = 0.03;
+  const arrow = new THREE.Mesh(new THREE.ConeGeometry(0.4, 0.8, 4).rotateX(Math.PI), new THREE.MeshBasicMaterial({ color: 0xffd23a }));
+  arrow.position.y = 2.4;
+  marker.add(ring, arrow);
+  marker.userData.arrow = arrow;
+  marker.name = 'doorMarker';
+  b.add(marker, 0, 0, 11.6);
+  marker.traverse((o) => (o.castShadow = o.receiveShadow = false));
+
+  return {
+    name: 'Lock & Load',
+    footprint: [-9.2, -5.2, 9.2, 9.2],
+    height: H,
+    color: SHOP,
+    respawn: [0, 12],
+    entrance: [0, 11.6],
+    buildings: [
+      { rect: [-17, -17, 17, -5], height: 15, color: SAND },
+      { rect: [-17, -5, -9.2, 11], height: 9, color: BRICK },
+      { rect: [9.2, -5, 17, 11], height: 12, color: 0x7f9fb6 },
+    ],
+  };
+}
+
 /** Accumulates a landmark's meshes in a group, and its solid parts as world-space colliders. */
 class Builder {
   constructor(cx, cz, colliders, windowTex) {
@@ -140,6 +219,17 @@ class Builder {
       for (let i = f * 4; i < f * 4 + 4; i++) uv.setXY(i, (uv.getX(i) * sizes[f][0]) / 3, (uv.getY(i) * sizes[f][1]) / 3);
     }
     return mesh;
+  }
+
+  /** Red-and-white candy-stripe awning material (stripes run front to back). */
+  awning() {
+    const tex = labelTexture(256, 32, (ctx, w, h) => {
+      for (let i = 0; i < 16; i++) {
+        ctx.fillStyle = i % 2 ? '#f5f1e8' : '#c8141c';
+        ctx.fillRect((i * w) / 16, 0, w / 16, h);
+      }
+    });
+    return toon({ map: tex });
   }
 
   /** A sign board: `face` texture on its front (+Z) side, plain backing elsewhere. */
@@ -249,6 +339,31 @@ function roofBadge(text, bg, fg) {
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.fillText(text, 320, h / 2 + 4);
+  });
+}
+
+/** Roof marking for the gun shop: a gold crosshair in a dark disc. */
+function crosshairBadge() {
+  return labelTexture(256, 256, (ctx, w) => {
+    const c = w / 2;
+    ctx.fillStyle = '#26354d';
+    ctx.beginPath();
+    ctx.arc(c, c, c - 4, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = '#f2c230';
+    ctx.lineWidth = 14;
+    for (const r of [c - 30, c * 0.35]) {
+      ctx.beginPath();
+      ctx.arc(c, c, r, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+    ctx.lineWidth = 12;
+    ctx.beginPath();
+    ctx.moveTo(c, 14), ctx.lineTo(c, c - 18);
+    ctx.moveTo(c, c + 18), ctx.lineTo(c, w - 14);
+    ctx.moveTo(14, c), ctx.lineTo(c - 18, c);
+    ctx.moveTo(c + 18, c), ctx.lineTo(w - 14, c);
+    ctx.stroke();
   });
 }
 

@@ -13,7 +13,7 @@ npm run dev
 Controls:
 - **In a car:** **W/↑** accelerate, **S/↓** brake/reverse, **A D / ← →** steer, **Space** handbrake (drift — leaves skid marks)
 - **On foot:** **WASD / arrows** move (screen-relative), **Shift** run
-- **F / Enter** get in or out of a car — works on traffic too (the driver gets thrown out and runs off)
+- **F / Enter** get in or out of a car — works on traffic too (the driver gets thrown out and runs off); walk into shops
 - **R** reset
 - **M** city map (shows you, police and traffic)
 - **Q** draw / holster your pistol (on foot), **mouse** to aim, **left click** (or **Ctrl**) to shoot, **E** reload
@@ -48,6 +48,22 @@ their own pistols and shoot back.
 Guns are data: add an entry to `WEAPONS` in `src/combat/weapons.js` (damage, fire rate, auto,
 magazine, reload time, range, spread, pellets, knockback, noise) and give it to the player with
 `player.giveWeapon(WEAPONS.x)`; Q cycles through what you carry.
+
+## Shops
+
+Some buildings can be walked into. Each has a glowing yellow ring and a bobbing arrow on the pavement at
+its door; stand on it and press **F**. The screen cuts to black and you're inside: only the interior is
+drawn (the street outside is frozen and invisible) until you walk back out through the door. Guns stay
+holstered indoors, and you can't go in with the police after you.
+
+The first is **Lock & Load**, a gun shop round the corner from where you start (crosshair badge on the
+map). Walk up to the counter and press **F** to buy guns: the **shotgun** (8 pellets a shot) and **SMG**
+(full auto), then ammo for anything you own. You start with **$2,500**, shown under your health bar.
+(There's no way to earn more yet — use `money <n>` in the dev console.)
+
+To add a shop: give a landmark an `entrance` in `src/world/Landmarks.js`, write its interior (see
+`src/interiors/GunShopInterior.js`: its own scene, lights, colliders, spawn point, counter and exit
+zone) and register it in `INTERIORS` in `src/interiors/Shops.js`.
 
 ## Vehicle damage
 
@@ -100,7 +116,7 @@ edges and boosts saturation. Roads have double-yellow centre lines, stop lines a
 - `src/main.js` – renderer, lighting, fixed-step game loop
 - `src/world/City.js` – procedural seeded city grid (roads, markings, buildings, parks, lamps) + AABB colliders
 - `src/vehicles/Car.js` – arcade car physics (grip/drift, steering, collisions) and mesh
-- `src/world/Landmarks.js` – special whole-block buildings: the police station (where you end up when busted) and the hospital (where you end up when you die); which blocks they sit on, their meshes, signs, roof markings and respawn points
+- `src/world/Landmarks.js` – special whole-block buildings: the police station (where you end up when busted), the hospital (where you end up when you die) and the Lock & Load gun shop; which blocks they sit on, their meshes, signs, roof markings and respawn points
 - `src/vehicles/damage.js` / `VehicleDamageSystem.js` – damage states for every vehicle; smoke, fire, explosions
 - `src/world/ColliderGrid.js` – spatial hash so cars only test nearby static colliders
 - `src/core/SpatialHash.js` – grids of the moving cars and people, rebuilt each physics step, so AI and collisions only look at neighbours
@@ -119,6 +135,8 @@ edges and boosts saturation. Roads have double-yellow centre lines, stop lines a
 - `src/police/PoliceSystem.js` – spawns/retires patrol cars by wanted level, pulls patrol cars out of traffic, deploys officers, sends beat cops after you, decides arrests
 - `src/police/PursuitDriver.js` – police driving: junction-to-junction navigation over the road grid toward you, then straight at you (leading your movement) when in view; three-point turns and backing out when stuck
 - `src/police/sight.js` – line-of-sight test against buildings
+- `src/interiors/Shops.js` – walk-in buildings: door markers, the cut to black, swapping the drawn scene to the interior and back, the counter menu and what the gun shop stocks
+- `src/interiors/GunShopInterior.js` – the gun shop's interior: room, counter, gun racks, shelves, the clerk, its colliders
 - `src/combat/Health.js` – hit points (damage / heal / dead) for anything that can be hurt
 - `src/combat/weapons.js` – weapon definitions (`WEAPONS`) and `Weapon` (ammo, fire-rate cooldown, reload)
 - `src/combat/CombatSystem.js` – fires shots for anyone (player or NPC): hitscan vs people, cars (oriented boxes) and buildings, damage + knockback, panic, tracers / muzzle flashes / impact puffs

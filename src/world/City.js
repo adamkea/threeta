@@ -139,6 +139,7 @@ export function createCity(seed = 1337) {
         group.add(l.group);
         landmarks.push(l);
         buildings.push({ ...l.footprint, color: l.color });
+        buildings.push(...l.buildings);
         // Build (and throw away) the block that would have stood here, so the rest of the city keeps its layout.
         if (!park && !lot) buildBlock(rng, x0, z0, downtown, new QuadBuilder(), new QuadBuilder(), [], []);
         continue;
