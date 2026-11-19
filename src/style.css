@@ -91,6 +91,7 @@ html, body {
 #map .legend .car::before { background: #e9e4da; }
 #map .legend .station::before { background: #22385c; box-shadow: inset 0 0 0 2px #f2c230; }
 #map .legend .hospital::before { background: #fff linear-gradient(#d23a2f, #d23a2f) center / 3px 7px no-repeat; }
+#map .legend .gunshop::before { background: #26354d; box-shadow: inset 0 0 0 2px #f2c230; }
 #map .legend .hint { opacity: .7; font-weight: 400; }
 #map .legend .hint::before { display: none; }
 
@@ -178,3 +179,59 @@ html, body {
 #perf.open { display: block; }
 #perf canvas { display: block; width: 300px; height: 56px; margin-bottom: 6px; }
 #perf pre { margin: 0; font: inherit; }
+
+/* Cash, under the health bar. */
+#money {
+  position: absolute; right: 22px; top: 92px;
+  font-size: 30px; font-weight: 900; font-style: italic; letter-spacing: .5px;
+  color: #7be86a;
+  -webkit-text-stroke: 2px #14110f; paint-order: stroke fill;
+  text-shadow: 3px 3px 0 #14110f;
+}
+#money.flash { animation: cash-flash .5s ease-out; }
+@keyframes cash-flash { from { color: #fff; transform: scale(1.12); } }
+
+/* Black cut between the street and a shop's interior. */
+#fade { position: absolute; inset: 0; background: #000; opacity: 0; }
+
+/* Shop counter menu. */
+#shop {
+  position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
+  display: none; pointer-events: auto;
+}
+#shop.open { display: block; }
+#shop .panel {
+  width: min(460px, calc(100vw - 32px)); box-sizing: border-box;
+  background: #f5f1e8; color: #14110f;
+  border: 4px solid #14110f; border-radius: 6px; box-shadow: 8px 8px 0 #14110f;
+  padding: 0 0 10px;
+}
+#shop h2 {
+  margin: 0 0 8px; padding: 8px 16px;
+  background: #c8141c; color: #fff; font-size: 28px; font-weight: 900; font-style: italic;
+  text-transform: uppercase; letter-spacing: 1px;
+  -webkit-text-stroke: 1.5px #14110f; paint-order: stroke fill; text-shadow: 3px 3px 0 #14110f;
+  border-bottom: 4px solid #14110f;
+}
+#shop .items { list-style: none; margin: 0; padding: 0 10px; }
+#shop .items li {
+  display: grid; grid-template-columns: 64px 1fr auto; gap: 12px; align-items: center;
+  padding: 6px 10px; border: 2px solid transparent; border-radius: 4px; cursor: pointer;
+}
+#shop .items li.sel { background: #14110f; color: #f5f1e8; }
+#shop .items li.sel .icon { color: #ffd23a; }
+#shop .items li.cant .price { color: #c8141c; }
+#shop .items li.sel.cant .price { color: #ff6a5a; }
+#shop .icon { display: block; width: 64px; height: 32px; color: #26354d; }
+#shop .icon svg { display: block; width: 100%; height: 100%; overflow: visible; }
+#shop .name { font-weight: 900; font-size: 17px; text-transform: uppercase; }
+#shop .detail { font-size: 12px; opacity: .75; }
+#shop .price { font-weight: 900; font-size: 20px; font-style: italic; }
+#shop .foot {
+  display: flex; justify-content: space-between; align-items: baseline;
+  margin: 8px 16px 0; padding-top: 8px; border-top: 2px solid #14110f;
+}
+#shop .cash { font-weight: 900; font-size: 20px; font-style: italic; color: #2f8a2a; }
+#shop .msg { font-weight: 700; font-size: 14px; }
+#shop .msg.bad { color: #c8141c; }
+#shop .hint { margin: 6px 16px 0; font-size: 12px; opacity: .7; }

@@ -12,6 +12,7 @@ const BINDINGS = {
   fire: ['Mouse0', 'ControlLeft', 'ControlRight'],
   weapon: ['KeyQ'], // draw / holster / cycle weapons
   reload: ['KeyE'],
+  back: ['Escape', 'Backspace'], // close menus
 };
 
 const isTextField = (el) => el instanceof HTMLElement && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA');

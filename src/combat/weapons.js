@@ -13,6 +13,7 @@
  *  pellets     bullets per shot (shotguns)
  *  knockback   m/s shove given to a person who's hit
  *  noise       metres within which people hear the shot (and panic)
+ *  model       how the gun held in the hand is drawn: { length, bulk } scales of the handgun
  */
 export const WEAPONS = {
   pistol: {
@@ -29,6 +30,39 @@ export const WEAPONS = {
     pellets: 1,
     knockback: 2.5,
     noise: 32,
+    model: { length: 1, bulk: 1 },
+  },
+  smg: {
+    id: 'smg',
+    name: 'SMG',
+    damage: 17,
+    fireRate: 11,
+    auto: true,
+    magSize: 30,
+    reserve: 120,
+    reloadTime: 1.6,
+    range: 40,
+    spread: 0.075,
+    pellets: 1,
+    knockback: 1.5,
+    noise: 38,
+    model: { length: 1.55, bulk: 1.2 },
+  },
+  shotgun: {
+    id: 'shotgun',
+    name: 'Shotgun',
+    damage: 15,
+    fireRate: 1.3,
+    auto: false,
+    magSize: 6,
+    reserve: 24,
+    reloadTime: 2.2,
+    range: 22,
+    spread: 0.16,
+    pellets: 8,
+    knockback: 6,
+    noise: 45,
+    model: { length: 2.3, bulk: 1.15 },
   },
 };
 

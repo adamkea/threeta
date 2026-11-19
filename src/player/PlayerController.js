@@ -29,6 +29,7 @@ export class PlayerController {
     this.combat = null; // CombatSystem, once it exists
     this.triggerHeld = false; // semi-auto guns need the trigger released between shots
     this.shotBuffer = 0;
+    this.money = 2500; // cash in hand, spent in shops
     ped.active = false;
     ped.mesh.visible = false;
   }

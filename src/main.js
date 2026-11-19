@@ -27,6 +27,7 @@ import { Neighbourhood } from './core/SpatialHash.js';
 import { VehicleDamageSystem } from './vehicles/VehicleDamageSystem.js';
 import { DevConsole } from './ui/DevConsole.js';
 import { PerfStats } from './ui/PerfStats.js';
+import { Shops } from './interiors/Shops.js';
 
 const canvas = document.getElementById('game');
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: false }); // AA is handled in InkRenderer (MSAA colour + SMAA)
@@ -201,13 +202,18 @@ function checkBikeCrashes(cars) {
   }
 }
 
+// --- Shops you can walk into (only while the police aren't after you) ---
+const shops = new Shops({ city, player, outside: scene, canEnter: () => wanted.stars === 0 });
+// Cut the camera straight to the new place, both ways (the fade hides the jump).
+shops.onEnter = shops.onExit = () => (rig.initialised = false);
+
 // Drivers only need to watch for people who are actually in the road.
 const onRoad = (p) => !p.dead && groundHeight(p.position.x, p.position.y) === 0;
 
 // --- Camera, input, HUD ---
 const input = new Input();
 const rig = new CameraRig(camera);
-const ZOOM = { car: [85, 120], foot: [40, 46] };
+const ZOOM = { car: [85, 120], foot: [40, 46], interior: [30, 30] };
 const speedBox = document.getElementById('speed');
 const speedEl = document.getElementById('speed-value');
 const promptEl = document.getElementById('prompt');
@@ -224,6 +230,8 @@ const weaponEl = document.getElementById('weapon');
 const weaponNameEl = weaponEl.querySelector('.name');
 const weaponAmmoEl = weaponEl.querySelector('.ammo');
 const weaponIconEl = weaponEl.querySelector('.icon');
+const moneyEl = document.getElementById('money');
+let shownMoney = null;
 let shownIconDef;
 let lastHp = playerPed.health.hp;
 let hurtFlash = 0;
@@ -270,13 +278,15 @@ const near = new Neighbourhood(); // spatial grids of cars and people, rebuilt e
 
 /** One fixed physics step for everything. */
 function step(dt) {
+  // In a shop the street outside is frozen: only the player moves, round the interior.
+  if (shops.inside) return shops.step(dt, shops.busy ? NO_INPUT : input);
   const cars = allCars();
   const peds = allPeds();
   const active = cars.filter((c) => c.active && !c.overboard);
   // Neighbour grids for the AI (positions at the start of the step)...
   near.rebuild(active, peds, peds.filter(onRoad));
   updateRiders(cars);
-  player.step(dt, bustedTimer > 0 ? NO_INPUT : input, world);
+  player.step(dt, bustedTimer > 0 || shops.busy ? NO_INPUT : input, world);
   traffic.step(dt, near, world);
   police.step(dt, policeCtx);
   npcs.step(dt, world, peds, near, lights);
@@ -370,7 +380,16 @@ function updateCombatHud(dt) {
     shownIconDef = iconDef;
   }
   weaponAmmoEl.innerHTML = w ? `${w.mag}<small>/${w.reserve}</small>` : '<small>Q — draw</small>';
-  canvas.style.cursor = player.armed && bustedTimer === 0 ? 'crosshair' : '';
+  canvas.style.cursor = player.armed && bustedTimer === 0 && !shops.inside ? 'crosshair' : '';
+  if (player.money !== shownMoney) {
+    if (shownMoney !== null) {
+      moneyEl.classList.toggle('flash', false);
+      void moneyEl.offsetWidth; // restart the animation
+      moneyEl.classList.toggle('flash', true);
+    }
+    moneyEl.textContent = `$${player.money.toLocaleString('en-US')}`;
+    shownMoney = player.money;
+  }
 }
 
 // --- Dev console (` to toggle) ---
@@ -443,11 +462,21 @@ devConsole.register('spawn', 'spawn <model | random> — park a car next to you 
   return `Spawned a ${model}.`;
 });
 
+devConsole.register('money', 'money [amount | +amount] — show / set your cash', ([n]) => {
+  if (n !== undefined) {
+    const v = Number(n.replace(/^\+/, ''));
+    if (!Number.isFinite(v)) throw new Error(`Not a number: "${n}"`);
+    player.money = Math.max(0, Math.round(n.startsWith('+') ? player.money + v : v));
+  }
+  return `Cash: $${player.money.toLocaleString('en-US')}`;
+});
+
 // Teleport: to coordinates, or to a named place. Cars land in the nearest lane.
 const PLACES = {
   spawn: () => SPAWN,
   police: () => landmark('police').respawn,
   hospital: () => landmark('hospital').respawn,
+  gunshop: () => landmark('gunshop').respawn,
   diagonal: () => {
     const g = LAYOUT.graph;
     const e = g.edges.filter((x) => x.width === 16)[2]; // the diagonal avenues are 16 m wide
@@ -462,6 +491,7 @@ const PLACES = {
 devConsole.register('tp', `tp <x> <z> | tp <${Object.keys(PLACES).join(' | ')}> — teleport`, ([a, b]) => {
   const place = PLACES[a]?.() ?? (Number.isFinite(+a) && Number.isFinite(+b) ? { x: +a, z: +b } : null);
   if (!place) throw new Error(`Usage: tp <x> <z> | tp <${Object.keys(PLACES).join(' | ')}>`);
+  shops.forceExit(); // back out on the street first
   if (player.inVehicle) {
     const lane = LAYOUT.graph.nearestLane(place.x, place.z, 0, 0, -2, 80);
     const p = lane ? lanePoint(lane.h, Math.max(4, Math.min(lane.s, LAYOUT.graph.edge(lane.h).len - 4))) : { x: place.x, z: place.z, d: [0, -1] };
@@ -495,7 +525,7 @@ devConsole.register('stats', 'stats [on | off] — keep the performance overlay 
 
 // Dev-only hook for debugging / automated tests.
 if (import.meta.env.DEV) {
-  window.__game = { policeCtx, parked, skids, player, traffic, npcs, lights, world, allCars, allPeds, step, input, wanted, police, combat, damage, rig, city, devConsole, STEP: 1 / 120 };
+  window.__game = { shops, policeCtx, parked, skids, player, traffic, npcs, lights, world, allCars, allPeds, step, input, wanted, police, combat, damage, rig, city, devConsole, STEP: 1 / 120 };
 }
 
 // --- Main loop: fixed-step physics, variable-rate rendering ---
@@ -509,11 +539,15 @@ function frame(now) {
   perf.setVisible(perfPinned || devConsole.isOpen);
   perf.beginFrame(dt);
 
-  if (bustedTimer === 0) {
-    if (input.wasPressed('reset')) resetPlayer();
-    if (input.wasPressed('use')) player.use(allCars(), world);
-    if (input.wasPressed('weapon') && !player.inVehicle) player.cycleWeapon();
-    if (input.wasPressed('fire')) player.pullTrigger();
+  shops.update(dt, input); // before the F key is handled below, so opening the menu doesn't also buy
+  if (bustedTimer === 0 && !shops.busy) {
+    const inShop = !!shops.inside;
+    if (input.wasPressed('use') && !shops.use()) player.use(allCars(), world);
+    if (!inShop) {
+      if (input.wasPressed('reset')) resetPlayer();
+      if (input.wasPressed('weapon') && !player.inVehicle) player.cycleWeapon();
+      if (input.wasPressed('fire')) player.pullTrigger();
+    }
   }
   updateAim();
   if (input.wasPressed('map')) cityMap.toggle();
@@ -527,7 +561,37 @@ function frame(now) {
     }
   });
 
-  // --- Per-frame bookkeeping & visuals ---
+  if (shops.inside) interiorFrame(dt);
+  else streetFrame(dt);
+  updateCombatHud(dt);
+
+  perf.measureRender(() => ink.render(shops.scene ?? scene, camera));
+  const entrance = shops.inside?.entrance;
+  cityMap.render(dt, {
+    // In a shop the map shows you at its door.
+    player: entrance ? { position: new THREE.Vector2(entrance.x, entrance.z), heading: entrance.heading } : player.body,
+    inVehicle: player.inVehicle,
+    cars: allCars().filter((c) => !isPoliceCar(c)),
+    policeCars: allCars().filter(isPoliceCar),
+    cops: npcs.peds.filter((p) => p.role === 'cop' && !p.isDown),
+  });
+  input.endFrame();
+  perf.endFrame();
+  requestAnimationFrame(frame);
+}
+
+/** Visuals and HUD while inside a shop: just the player, the room and the camera. */
+function interiorFrame(dt) {
+  player.ped.groundY = 0;
+  player.ped.syncMesh(dt);
+  rig.setZoom(...ZOOM.interior);
+  rig.update(dt, shops.camTarget);
+  speedBox.style.visibility = 'hidden';
+  promptEl.textContent = bustedTimer > 0 ? '' : shops.prompt();
+}
+
+/** Per-frame bookkeeping & visuals out on the street. */
+function streetFrame(dt) {
   lights.update(dt);
   for (const c of allCars()) if (c.active) c.syncMesh();
   skids.update(dt, allCars());
@@ -554,20 +618,7 @@ function frame(now) {
   const canEnter = player.findEnterableCar(allCars());
   const occupied = traffic.drivers.has(canEnter) || police.owns(canEnter);
   const what = canEnter?.isBike ? 'bike' : 'car';
-  promptEl.textContent =
-    player.inVehicle || bustedTimer > 0 ? '' : canEnter ? (occupied ? `F — hijack ${what}` : canEnter.isBike ? 'F — get on' : 'F — get in') : '';
-  updateCombatHud(dt);
-
-  perf.measureRender(() => ink.render(scene, camera));
-  cityMap.render(dt, {
-    player: player.body,
-    inVehicle: player.inVehicle,
-    cars: allCars().filter((c) => !isPoliceCar(c)),
-    policeCars: allCars().filter(isPoliceCar),
-    cops: npcs.peds.filter((p) => p.role === 'cop' && !p.isDown),
-  });
-  input.endFrame();
-  perf.endFrame();
-  requestAnimationFrame(frame);
+  const carPrompt = canEnter ? (occupied ? `F — hijack ${what}` : canEnter.isBike ? 'F — get on' : 'F — get in') : '';
+  promptEl.textContent = player.inVehicle || bustedTimer > 0 ? '' : shops.prompt() || carPrompt;
 }
 requestAnimationFrame(frame);

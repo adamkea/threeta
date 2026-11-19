@@ -258,6 +258,8 @@ export class Pedestrian {
   setWeapon(def) {
     this.weapon = def;
     showBone(this.acc.gun, def !== null);
+    // Longer, chunkier guns are the handgun stretched down the barrel (the arm's -Y axis).
+    if (def?.model) this.acc.gun.scale.set(def.model.bulk, def.model.length, def.model.bulk);
   }
 
   reset(x, z, heading = 0) {

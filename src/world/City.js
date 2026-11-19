@@ -49,7 +49,7 @@ export function createCity(seed = 1337) {
     const lm = createLandmark(l.kind, l.cx, l.cz, CITY.curbHeight, { colliders, windowTex, angle: l.angle });
     group.add(lm.group);
     landmarks.push(lm);
-    buildings.push({ ...lm.footprint, color: lm.color });
+    buildings.push({ ...lm.footprint, color: lm.color }, ...lm.buildings);
   }
 
   const sidewalkMat = toon({ map: createTileTexture(), vertexColors: true });

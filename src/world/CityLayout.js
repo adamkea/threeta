@@ -569,8 +569,10 @@ function assignUses(layout, rng) {
   makeLot(start.b, start.fit);
 
   // Landmarks: blocks big enough for them, near where they'd sit in town.
-  for (const [kind, fx, fz] of [['police', -0.3, 0.15], ['hospital', 0.3, -0.35]]) {
-    const found = nearest(fx * half, fz * half, (b) => fitRect(b, b.frame, 19, 19));
+  // The gun shop goes on the nearest big-enough block to the starting car park, so it's easy to find.
+  const sc = start.b.center;
+  for (const [kind, x, z] of [['police', -0.3 * half, 0.15 * half], ['hospital', 0.3 * half, -0.35 * half], ['gunshop', sc.x, sc.z]]) {
+    const found = nearest(x, z, (b) => fitRect(b, b.frame, 19, 19));
     if (!found) continue;
     const { b, fit } = found;
     b.use = kind;
