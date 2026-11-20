@@ -2,21 +2,35 @@ import * as THREE from 'three';
 import { toon } from '../render/toon.js';
 
 // The sea round the island: a toon-lit plane whose colour is worked out in the shader from the
-// distance to the quay. It deepens smoothly away from the island, soft ripple lines drift across
-// it, the water darkens where it meets the quay wall and a thin lip of foam laps against the wall.
-// The plane itself stays flat (the ink pass reads normals from the geometry), so all the motion
-// is in the fragment shader.
+// distance to the coast (a distance field baked from the shore layout, see seaField). It deepens
+// smoothly away from the island and soft ripple lines drift across it. Against the quays the water
+// darkens and a thin lip of foam laps at the wall; off the beaches it's shallow and turquoise, and
+// surf washes up the sand. The plane itself stays flat (the ink pass reads normals from the
+// geometry), so all the motion is in the fragment shader.
 
 /**
- * @param {number} half   half-size of the (square) island, in metres
+ * @param {{minX:number,minZ:number,cell:number,w:number,h:number,dist:Float32Array,beach:Float32Array}} field
+ *   signed distance to the waterline (negative on land) and beach-ness, on a grid
  * @param {number} y      water level
  * @param {number} extent side of the water plane
  * @returns {{ mesh: THREE.Mesh, update(dt: number): void }}
  */
-export function createWater(half, y, extent) {
+export function createWater(field, y, extent) {
+  const texels = new Uint16Array(field.w * field.h * 2);
+  for (let i = 0; i < field.w * field.h; i++) {
+    texels[i * 2] = THREE.DataUtils.toHalfFloat(field.dist[i]);
+    texels[i * 2 + 1] = THREE.DataUtils.toHalfFloat(field.beach[i]);
+  }
+  const coast = new THREE.DataTexture(texels, field.w, field.h, THREE.RGFormat, THREE.HalfFloatType);
+  coast.minFilter = coast.magFilter = THREE.LinearFilter;
+  coast.wrapS = coast.wrapT = THREE.ClampToEdgeWrapping;
+  coast.needsUpdate = true;
+
   const uniforms = {
     uTime: { value: 0 },
-    uHalf: { value: half },
+    uCoast: { value: coast },
+    uCoastMin: { value: new THREE.Vector2(field.minX, field.minZ) },
+    uCoastSize: { value: new THREE.Vector2(field.w * field.cell, field.h * field.cell) },
   };
 
   const mat = toon({ color: 0xffffff });
@@ -46,7 +60,9 @@ export function createWater(half, y, extent) {
 
 const SEA_GLSL = /* glsl */ `
 varying vec2 vSeaPos;
-uniform float uTime, uHalf;
+uniform float uTime;
+uniform sampler2D uCoast;
+uniform vec2 uCoastMin, uCoastSize;
 
 // 2D simplex noise (Ashima Arts / Stefan Gustavson, MIT). Unlike value noise on a square grid it
 // is built on triangles, so the ripples don't show square cells when you look closely.
@@ -87,22 +103,30 @@ float seaFbm(vec2 p) {
 
 vec3 seaColour(vec2 p) {
   float t = uTime;
-  // Distance out from the quay (a square island), and how far along the nearest stretch of it.
-  vec2 q = abs(p) - uHalf;
-  float d = length(max(q, 0.0)) + min(max(q.x, q.y), 0.0);
-  float along = q.x > q.y ? p.y : p.x;
-  // Deepens smoothly from teal by the quay to dark blue out at sea.
+  // Distance out from the waterline, and whether that bit of coast is a beach or a quay.
+  vec2 coast = texture2D(uCoast, (p - uCoastMin) / uCoastSize).rg;
+  float d = coast.r;
+  float beach = clamp(coast.g, 0.0, 1.0);
+  // Deepens smoothly from teal by the shore to dark blue out at sea; shallow turquoise off the beaches.
   vec3 col = mix(vec3(0.08, 0.36, 0.45), vec3(0.03, 0.17, 0.30), smoothstep(2.0, 60.0, d));
+  col = mix(col, vec3(0.16, 0.62, 0.66), beach * (1.0 - smoothstep(0.0, 16.0, d)));
   // Soft moving ripples: difference of two drifting noise fields, lightening the crests.
   float r1 = seaFbm(p * vec2(0.19, 0.12) + vec2(t * 0.08, t * 0.03));
   float r2 = seaFbm(p * vec2(0.12, 0.19) - vec2(t * 0.03, t * 0.08));
   float rip = smoothstep(0.06, 0.0, abs(r1 - r2));
   col += vec3(0.10, 0.16, 0.18) * rip * 0.6;
-  // Dark band where the wall meets the water.
-  col *= mix(0.55, 1.0, smoothstep(0.2, 1.6, d));
-  // Thin lip of foam lapping against the wall.
-  float lip = 0.12 + 0.18 * (0.5 + 0.5 * sin(t * 1.6 + along * 0.4)) + seaNoise(vec2(along * 0.8, t)) * 0.15;
-  col = mix(col, vec3(0.85, 0.93, 0.95), step(d, lip));
+  // Dark band where a quay wall meets the water.
+  col *= mix(mix(0.55, 1.0, smoothstep(0.2, 1.6, d)), 1.0, beach);
+  // Foam: a thin lip lapping at the quays; on the beaches, surf washing up and down the sand and
+  // lines of breaking waves rolling in.
+  float n = seaNoise(p * 0.35 + vec2(t * 0.2, -t * 0.15));
+  float quayLip = 0.12 + 0.18 * (0.5 + 0.5 * sin(t * 1.6 + (p.x + p.y) * 0.4)) + seaNoise(p * 0.8 + t) * 0.15;
+  float surf = 0.6 + 0.9 * (0.5 + 0.5 * sin(t * 0.9 + n * 3.0)) + n * 0.8;
+  float lip = mix(quayLip, surf, beach);
+  float wave = fract(t * 0.11 + n * 0.25);
+  float waveLine = beach * smoothstep(0.55, 0.0, abs(d - (1.0 - wave) * 9.0 - 1.0)) * smoothstep(0.0, 0.25, wave) * (1.0 - wave) * step(0.45, n);
+  float foam = max(step(d, lip), waveLine * 0.9);
+  col = mix(col, vec3(0.85, 0.93, 0.95), foam);
   return col;
 }
 `;

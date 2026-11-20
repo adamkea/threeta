@@ -5,13 +5,16 @@ import { createLandmark } from './Landmarks.js';
 import { createPayPhones } from './PayPhones.js';
 import { createStreetGrime } from './StreetGrime.js';
 import { createWater } from './Water.js';
-import { CITY, LAYOUT, LOT, WATER_Y, blockAt, groundHeight, offIsland, toWorld } from './CityLayout.js';
+import { createShore } from './Shore.js';
+import { seaField } from './shoreLayout.js';
+import { QuadBuilder, canvasTexture } from './meshKit.js';
+import { CITY, LAYOUT, LOT, WATER_Y, blockAt, driveHeight, groundHeight, offIsland, toWorld } from './CityLayout.js';
 import {
   bounds, centroid, clipHalfPlane, insideConvex, isAxisRect, offsetConvex, offsetConvexPaired, signedArea,
 } from './geom.js';
 
 // The city's meshes and colliders, built from the layout in CityLayout.js (road graph + blocks).
-export { CITY, LAYOUT, LOT, WATER_Y, blockAt, groundHeight, offIsland };
+export { CITY, LAYOUT, LOT, WATER_Y, blockAt, driveHeight, groundHeight, offIsland };
 
 // Comic-city palette: warm brick, sandstone, slate and a few loud accents.
 const BUILDING_COLORS = [
@@ -31,7 +34,7 @@ export function createCity(seed = 1337) {
   const colliders = [];
   const { blocks } = LAYOUT;
 
-  const water = createWater(CITY.half, WATER_Y, CITY.size * 6);
+  const water = createWater(seaField(LAYOUT.shore), WATER_Y, CITY.size * 6);
   group.add(createGround(), water.mesh);
   group.add(createRoadMarkings());
 
@@ -57,6 +60,10 @@ export function createCity(seed = 1337) {
     buildings.push({ ...lm.footprint, color: lm.color }, ...lm.buildings);
   }
 
+  const shore = createShore(createRng(seed + 31), LAYOUT.shore, slabs, colliders);
+  group.add(shore.group);
+  buildings.push(...shore.stacks); // container stacks show on the map
+
   const sidewalkMat = toon({ map: createTileTexture(), vertexColors: true });
   const parking = createParkingLots(createRng(seed + 7), slabs, colliders);
   const slabMesh = new THREE.Mesh(slabs.build(), sidewalkMat);
@@ -73,7 +80,7 @@ export function createCity(seed = 1337) {
 
   group.add(createParks(rng, parks, grass, colliders));
   group.add(parking.group);
-  group.add(createStreetLamps(colliders));
+  group.add(createStreetLamps(colliders, shore.lamps));
 
   const grime = createStreetGrime({ ...extras, colliders, seed: seed + 11 });
   group.add(grime.group);
@@ -307,18 +314,12 @@ function addBuilding(rng, poly, y0, h, color, walls, roofs, meta = null) {
   }
 }
 
+/** Asphalt over the whole road network, out to the curb along the sea side of the coast road. */
 function createGround() {
-  const g = new THREE.Group();
-  const asphalt = new THREE.Mesh(new THREE.PlaneGeometry(CITY.size, CITY.size), toon({ map: createAsphaltTexture() }));
-  asphalt.rotation.x = -Math.PI / 2;
+  const shape = new THREE.Shape(LAYOUT.shore.curb.map((p) => new THREE.Vector2(p.x, -p.z)));
+  const asphalt = new THREE.Mesh(new THREE.ShapeGeometry(shape).rotateX(-Math.PI / 2), toon({ map: createAsphaltTexture() }));
   asphalt.receiveShadow = true;
-  g.add(asphalt);
-
-  // Open quayside: the island is a slab standing in the sea, with no wall to stop you going over.
-  const quay = new THREE.Mesh(new THREE.BoxGeometry(CITY.size, 4, CITY.size), toon({ color: 0x9a9384 }));
-  quay.position.y = -2.01; // top sits just under the asphalt
-  g.add(quay);
-  return g;
+  return asphalt;
 }
 
 /**
@@ -421,9 +422,10 @@ function createParks(rng, parks, grass, colliders) {
 
 /**
  * Street lamps: one on every traffic-signal pole (the signals hang off them, see
- * TrafficLights.js), plus one at each other block corner.
+ * TrafficLights.js), plus one at each other block corner, plus `extra` ones [x, z, y?] (along
+ * the promenade and the pier).
  */
-function createStreetLamps(colliders) {
+function createStreetLamps(colliders, extra = []) {
   const spots = [];
   const near = (x, z, r) => spots.some(([sx, sz]) => Math.hypot(sx - x, sz - z) < r);
   for (const h of LAYOUT.signalHeads) if (!near(h.x, h.z, 0.5)) spots.push([h.x, h.z]);
@@ -436,6 +438,7 @@ function createStreetLamps(colliders) {
       spots.push([x, z]);
     }
   }
+  for (const [x, z, y] of extra) if (!near(x, z, 3)) spots.push([x, z, y]);
   const pole = new THREE.InstancedMesh(
     new THREE.CylinderGeometry(0.14, 0.18, 6, 8),
     toon({ color: 0x2f5a3e }), // classic dark-green city lamp posts
@@ -443,10 +446,10 @@ function createStreetLamps(colliders) {
   );
   const head = new THREE.InstancedMesh(new THREE.BoxGeometry(0.8, 0.35, 0.8), new THREE.MeshBasicMaterial({ color: 0xfff1b8 }), spots.length);
   const m = new THREE.Matrix4();
-  spots.forEach(([x, z], i) => {
-    m.makeTranslation(x, CITY.curbHeight + 3, z);
+  spots.forEach(([x, z, y = CITY.curbHeight], i) => {
+    m.makeTranslation(x, y + 3, z);
     pole.setMatrixAt(i, m);
-    m.makeTranslation(x, CITY.curbHeight + 6.1, z);
+    m.makeTranslation(x, y + 6.1, z);
     head.setMatrixAt(i, m);
     colliders.push({ minX: x - 0.2, maxX: x + 0.2, minZ: z - 0.2, maxZ: z + 0.2 });
   });
@@ -485,18 +488,6 @@ function createParkingSign(x, z) {
   pole.castShadow = board.castShadow = true;
   sign.add(pole, board);
   return sign;
-}
-
-function canvasTexture(size, draw, repeat = 1) {
-  const canvas = document.createElement('canvas');
-  canvas.width = canvas.height = size;
-  draw(canvas.getContext('2d'), size);
-  const tex = new THREE.CanvasTexture(canvas);
-  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
-  tex.repeat.set(repeat, repeat);
-  tex.colorSpace = THREE.SRGBColorSpace;
-  tex.anisotropy = 8;
-  return tex;
 }
 
 /** Facade tile (3m x 3m): white wall (tinted by vertex colour), a framed window with a glint. */
@@ -576,58 +567,6 @@ function createAsphaltTexture() {
         ctx.fillRect(Math.random() * n, Math.random() * n, 1, 1);
       }
     },
-    CITY.size / 16,
+    1 / 16, // the ground's UVs are in metres: one tile per 16 m
   );
-}
-
-/** Accumulates coloured, UV-mapped quads into a single merged BufferGeometry. */
-/** Accumulates coloured, UV-mapped faces into a single merged BufferGeometry. */
-class QuadBuilder {
-  constructor(tile = 3) {
-    this.tile = tile;
-    this.pos = [];
-    this.nrm = [];
-    this.uv = [];
-    this.col = [];
-    this.idx = [];
-  }
-
-  /** Convex polygon fan; `pts` are [x, y, z], `uvs` are [u, v], wound front-facing. */
-  face(pts, n, uvs, color) {
-    const base = this.pos.length / 3;
-    pts.forEach((p, i) => {
-      this.pos.push(...p);
-      this.nrm.push(...n);
-      this.uv.push(...uvs[i]);
-      this.col.push(color.r, color.g, color.b);
-    });
-    for (let i = 1; i + 1 < pts.length; i++) this.idx.push(base, base + i, base + i + 1);
-  }
-
-  /** Vertical wall from (ax, az) to (bx, bz), facing (-(bz - az), bx - ax): to the left going a -> b. */
-  wall(ax, az, bx, bz, y0, y1, color) {
-    const len = Math.hypot(bx - ax, bz - az);
-    if (len < 1e-6) return;
-    const n = [-(bz - az) / len, 0, (bx - ax) / len];
-    const w = len / this.tile, h = (y1 - y0) / this.tile;
-    this.face([[ax, y0, az], [bx, y0, bz], [bx, y1, bz], [ax, y1, az]], n, [[0, 0], [w, 0], [w, h], [0, h]], color);
-  }
-
-  /** Flat, upward-facing convex polygon (CCW in x/z, see geom.js) at height y, UVs in world space. */
-  polyTop(poly, y, color) {
-    const t = this.tile;
-    const pts = poly.slice().reverse();
-    this.face(pts.map((p) => [p.x, y, p.z]), [0, 1, 0], pts.map((p) => [p.x / t, -p.z / t]), color);
-  }
-
-  build() {
-    const g = new THREE.BufferGeometry();
-    g.setAttribute('position', new THREE.Float32BufferAttribute(this.pos, 3));
-    g.setAttribute('normal', new THREE.Float32BufferAttribute(this.nrm, 3));
-    g.setAttribute('uv', new THREE.Float32BufferAttribute(this.uv, 2));
-    g.setAttribute('color', new THREE.Float32BufferAttribute(this.col, 3));
-    g.setIndex(this.idx);
-    g.computeBoundingSphere();
-    return g;
-  }
 }
