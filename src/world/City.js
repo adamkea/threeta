@@ -5,13 +5,13 @@ import { createLandmark } from './Landmarks.js';
 import { createPayPhones } from './PayPhones.js';
 import { createStreetGrime } from './StreetGrime.js';
 import { createWater } from './Water.js';
-import { CITY, LAYOUT, LOT, WATER_Y, blockAt, groundHeight, offIsland, toWorld } from './CityLayout.js';
+import { CITY, LAYOUT, LOT, WATER_Y, blockAt, groundHeight, offIsland, onGrass, GRASS_TOP, toWorld } from './CityLayout.js';
 import {
   bounds, centroid, clipHalfPlane, insideConvex, isAxisRect, offsetConvex, offsetConvexPaired, signedArea,
 } from './geom.js';
 
 // The city's meshes and colliders, built from the layout in CityLayout.js (road graph + blocks).
-export { CITY, LAYOUT, LOT, WATER_Y, blockAt, groundHeight, offIsland };
+export { CITY, LAYOUT, LOT, WATER_Y, blockAt, groundHeight, offIsland, onGrass, GRASS_TOP };
 
 // Comic-city palette: warm brick, sandstone, slate and a few loud accents.
 const BUILDING_COLORS = [

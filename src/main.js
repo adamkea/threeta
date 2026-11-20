@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { Input } from './core/Input.js';
 import { CameraRig } from './core/CameraRig.js';
-import { createCity, groundHeight, offIsland, LAYOUT } from './world/City.js';
+import { createCity, groundHeight, offIsland, onGrass, GRASS_TOP, LAYOUT } from './world/City.js';
 import { Car } from './vehicles/Car.js';
 import { MODELS, randomModel } from './vehicles/carModels.js';
 import { ColliderGrid } from './world/ColliderGrid.js';
@@ -76,7 +76,9 @@ const lights = new TrafficLights(rng);
 scene.add(lights.mesh);
 const traffic = new TrafficSystem(scene, rng, lights);
 const npcs = new NpcManager(scene, rng);
-const skids = new SkidMarks(scene, groundHeight);
+const skids = new SkidMarks(scene, (x, z) => (onGrass(x, z)
+  ? { height: GRASS_TOP, grass: true }
+  : { height: groundHeight(x, z), grass: false }));
 
 // The player: brown leather jacket over a white tee, no hat, so they never blend into a crowd.
 const playerPed = new Pedestrian({ shirt: 0x6b3f22, inner: 0xf5f5f5, pants: 0x23262e, hair: 0x1a120c, chain: true });
