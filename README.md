@@ -194,9 +194,8 @@ instanced or merged so it costs a handful of draw calls:
 - **Curbside:** piles of bin bags, overflowing wire trash cans, fire hydrants, rows of newspaper boxes and
   dumpsters (these are solid).
 - **Walls:** dirt splashed up the bottom of street-facing walls, plus graffiti: bubble-letter throw-ups,
-  handstyle tags, wheatpaste posters and sticker bombs. Fire escapes zig-zag up some of the walk-ups.
-- **Rooftops:** wooden water towers, tar stains and the occasional big throw-up meant to be read from
-  above.
+  handstyle tags, wheatpaste posters and sticker bombs, at street level and higher up the taller walls. Fire escapes zig-zag up some of the walk-ups.
+- **Rooftops:** wooden water towers and tar stains.
 - **Steam** rises from some manholes and from striped steam stacks in the road (GPU-animated sprites).
 
 The textures are drawn on canvases at load (`src/world/grimeTextures.js`). Flat decals are kept out of
