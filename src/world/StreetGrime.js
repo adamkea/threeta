@@ -43,7 +43,7 @@ export function createStreetGrime({ facades, roofTops, colliders, seed = 77 }) {
   }
   const escaped = new Set();
   for (const f of facades) dressFacade(rng, f, graffiti, grime, props, escaped);
-  for (const r of roofTops) dressRoof(rng, r, ground, graffiti, props);
+  for (const r of roofTops) dressRoof(rng, r, ground, props);
 
   const decalMat = (map) => toon({ map, transparent: true, depthWrite: false, side: THREE.DoubleSide, alphaTest: 0.02 });
   const layers = [[ground, createGroundAtlas()], [grime, createWallGrimeTexture()], [graffiti, createGraffitiAtlas()]];
@@ -294,20 +294,25 @@ function dressFacade(rng, f, graffiti, grime, props, escaped) {
     [[0, 0], [f.len / 4, 0], [f.len / 4, 1], [0, 1]],
   );
 
-  // Graffiti: walls the camera can see get the most.
+  // Graffiti: walls the camera can see get the most. A street-level row, plus pieces higher up
+  // (painted from ledges and fire escapes) on walls tall enough to hold them.
   const visible = f.nz > -0.4;
-  if (rng.chance(visible ? 0.7 : 0.25)) {
+  if (rng.chance(visible ? 0.95 : 0.6)) {
     const taken = [];
-    for (let k = 0, n = rng.int(1, Math.max(1, Math.floor(f.len / 4))); k < n; k++) {
+    const wallH = f.top - f.y0;
+    const tries = Math.max(3, Math.floor(f.len / 1.8));
+    for (let k = 0, placed = 0; k < tries; k++) {
       const kind = weighted(rng, GRAFFITI_KINDS);
       const w = kind === 'throwUps' ? rng.range(2.6, 4.6) : kind === 'tags' ? rng.range(1.4, 2.8) : rng.range(1.8, 2.8);
       if (w > f.len - 0.4) continue;
+      const high = kind !== 'posters' && wallH > 5 && rng.chance(0.35);
+      const base = f.y0 + (kind === 'posters' ? rng.range(0.5, 0.9) : high ? rng.range(2.2, Math.min(wallH - w / 2 - 0.3, 6)) : rng.range(0.15, 0.7));
       const s = rng.range(-f.len / 2 + w / 2 + 0.2, f.len / 2 - w / 2 - 0.2);
-      if (taken.some(([a, c]) => s + w / 2 > a && s - w / 2 < c)) continue;
-      taken.push([s - w / 2, s + w / 2]);
+      const box = [s - w / 2, s + w / 2, base, base + w / 2];
+      if (taken.some(([a, c, y0, y1]) => box[1] > a && box[0] < c && box[3] > y0 && box[2] < y1)) continue;
+      taken.push(box);
       const [first, count] = GRAF[kind];
-      const base = f.y0 + (kind === 'posters' ? rng.range(0.5, 0.9) : rng.range(0.15, 0.7));
-      const o = 0.01 + k * 0.004;
+      const o = 0.01 + placed++ * 0.004;
       graffiti.wall(mx + ux * s + f.nx * o, mz + uz * s + f.nz * o, ux, uz, f.nx, f.nz, base, w, w / 2, first + rng.int(0, count - 1));
     }
   }
@@ -327,7 +332,7 @@ function dressFacade(rng, f, graffiti, grime, props, escaped) {
   }
 }
 
-function dressRoof(rng, r, ground, graffiti, props) {
+function dressRoof(rng, r, ground, props) {
   const { poly, top } = r;
   const bb = polyBounds(poly);
   const inside = (x, z, m) => insideConvex(poly, x, z, -m);
@@ -345,28 +350,6 @@ function dressRoof(rng, r, ground, graffiti, props) {
     const s = rng.range(1.5, 3.5);
     const pt = randomPoint(s * 0.6);
     if (pt) ground.flat(pt[0], top + 0.02 + k * 1e-4, pt[1], s, s, rng.range(0, 6.3), DECAL[rng.pick(['grime', 'puddle', 'stain'])]);
-  }
-
-  // A rooftop throw-up, painted to be read from the air.
-  if (rng.chance(0.2)) {
-    let li = 0, L = 0;
-    for (let i = 0; i < poly.length; i++) {
-      const a = poly[i], b = poly[(i + 1) % poly.length];
-      const l = Math.hypot(b.x - a.x, b.z - a.z);
-      if (l > L) (L = l), (li = i);
-    }
-    const a = poly[li], b = poly[(li + 1) % poly.length];
-    let rot = Math.atan2(b.z - a.z, b.x - a.x);
-    if (Math.cos(rot) < 0) rot += Math.PI; // letters upright on screen (north up)
-    const c = polyCentroid(poly);
-    for (let w = Math.min(10, L * 0.8); w >= 4; w -= 1.5) {
-      const hw = w / 2, hh = w / 4;
-      const cs = Math.cos(rot), sn = Math.sin(rot);
-      const ok = [[-hw, -hh], [hw, -hh], [hw, hh], [-hw, hh]].every(([lx, lz]) => inside(c.x + lx * cs - lz * sn, c.z + lx * sn + lz * cs, 0.3));
-      if (!ok) continue;
-      graffiti.flat(c.x, top + 0.03, c.z, w, w / 2, rot, GRAF.throwUps[0] + rng.int(0, GRAF.throwUps[1] - 1));
-      break;
-    }
   }
 
   // Wooden water tower on stilts.
@@ -389,12 +372,6 @@ function polyBounds(poly) {
     minZ = Math.min(minZ, p.z); maxZ = Math.max(maxZ, p.z);
   }
   return { minX, maxX, minZ, maxZ };
-}
-
-function polyCentroid(poly) {
-  let x = 0, z = 0;
-  for (const p of poly) (x += p.x), (z += p.z);
-  return { x: x / poly.length, z: z / poly.length };
 }
 
 /* ---------------------------------------------------------------------------------------- */
