@@ -1056,4 +1056,11 @@ export function groundHeight(x, z) {
   return CITY.curbHeight;
 }
 
+/** Height of the park lawns' top face (the turf sits a little proud of the sidewalk slab). */
+export const GRASS_TOP = CITY.curbHeight + 0.1;
 
+/** True on a park lawn (inside the park's ring of sidewalk). */
+export function onGrass(x, z) {
+  const b = blockAt(x, z);
+  return !!b && b.use === 'park' && insideConvex(b.shape, x, z, -CITY.sidewalk);
+}

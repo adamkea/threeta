@@ -8,13 +8,15 @@ import { createWater } from './Water.js';
 import { createShore } from './Shore.js';
 import { seaField } from './shoreLayout.js';
 import { QuadBuilder, canvasTexture } from './meshKit.js';
-import { CITY, LAYOUT, LOT, WATER_Y, blockAt, driveHeight, groundHeight, offIsland, toWorld } from './CityLayout.js';
+import {
+  CITY, LAYOUT, LOT, WATER_Y, GRASS_TOP, blockAt, driveHeight, groundHeight, offIsland, onGrass, toWorld,
+} from './CityLayout.js';
 import {
   bounds, centroid, clipHalfPlane, insideConvex, isAxisRect, offsetConvex, offsetConvexPaired, signedArea,
 } from './geom.js';
 
 // The city's meshes and colliders, built from the layout in CityLayout.js (road graph + blocks).
-export { CITY, LAYOUT, LOT, WATER_Y, blockAt, driveHeight, groundHeight, offIsland };
+export { CITY, LAYOUT, LOT, WATER_Y, GRASS_TOP, blockAt, driveHeight, groundHeight, offIsland, onGrass };
 
 // Comic-city palette: warm brick, sandstone, slate and a few loud accents.
 const BUILDING_COLORS = [
