@@ -159,6 +159,19 @@ Comic-book rendering in the spirit of Chinatown Wars: toon (banded) materials (`
 plus an ink pass (`src/render/InkRenderer.js`) that draws thick black outlines from depth and normal
 edges and boosts saturation. Roads have double-yellow centre lines, stop lines and zebra crossings.
 
+### People
+
+People are built from smooth primitives baked into one skinned mesh each (`src/characters/Pedestrian.js`),
+proportioned about 5.5 heads tall rather than as big-headed toy figures. The skin bends at the knees,
+elbows, hips and shoulders (`blendJoints` in `src/render/skinBake.js`): vertices near a joint share their
+weight between the bones either side, so limbs bend round the corner instead of hinging like an action
+figure. People are drawn on their own layer, so the ink pass leaves out the lines where a person's own
+parts merge (neck into head, sleeve into hand) and only inks one part where it really passes in front of
+another.
+
+To look at them up close, run `npm run dev` and open `/lineup/` (a row of people in different
+outfits and poses; `?view=side|front|top`, add `&down` to knock some over).
+
 ### Street grime
 
 `src/world/StreetGrime.js` roughs the clean city up into something grittier, all deterministic and
