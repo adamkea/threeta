@@ -2,10 +2,13 @@ import * as THREE from 'three';
 import { offIsland, WATER_Y } from '../world/City.js';
 import { circlePush } from '../world/colliders.js';
 import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeometry.js';
-import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
+import { mergeGeometries, mergeVertices } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { toon } from '../render/toon.js';
 import { CHAR_LAYER } from '../render/InkRenderer.js';
-import { bindPart, blendJoints, boneOf, rigMesh, showBone, toRestPose, usePalette, worldSkeleton } from '../render/skinBake.js';
+import {
+  addMorphs, bindPart, blendJoints, boneOf, rigMesh, showBone, toRestPose, usePalette, worldSkeleton,
+} from '../render/skinBake.js';
+import { MORPHS, hairCap, hairline, morphDelta, onHead, sculptHead } from './bodyShapes.js';
 import { Health } from '../combat/Health.js';
 
 /**
@@ -49,6 +52,22 @@ const TORSO_Y = HIP_Y + 0.3; // torso pivot (the waist)
 const HEAD_Y = 0.66; // head centre above the torso pivot
 const HEAD_SCALE = 0.76; // head, hair and headwear are modelled at the old comic size and scaled down
 
+/** The sculpted head (see sculptHead), welded so its normals have no seam. */
+function headGeometry() {
+  let g = new THREE.SphereGeometry(0.25, 28, 20);
+  g.deleteAttribute('uv');
+  g.deleteAttribute('normal');
+  g = mergeVertices(g);
+  const pos = g.getAttribute('position');
+  const v = new THREE.Vector3();
+  for (let i = 0; i < pos.count; i++) {
+    sculptHead(v.fromBufferAttribute(pos, i));
+    pos.setXYZ(i, v.x, v.y, v.z);
+  }
+  g.computeVertexNormals();
+  return g;
+}
+
 /** Smooth bump peaking at 1 when phase `p` is at `center` (wraps around the cycle). */
 function bump(p, center, width) {
   const d = Math.atan2(Math.sin(p - center), Math.cos(p - center));
@@ -77,10 +96,26 @@ function pedGeometry() {
     ),
     hips: lathe([[0, -0.37], [0.15, -0.365], [0.225, -0.32], [0.25, -0.24], [0.24, -0.15], [0, -0.13]], 0.72),
     neck: new THREE.CylinderGeometry(0.075, 0.095, 0.18, 14),
-    head: new THREE.SphereGeometry(0.25, 24, 18).scale(0.96, 1.04, 1),
+    head: headGeometry(),
     ear: new THREE.SphereGeometry(0.05, 10, 8).scale(0.6, 1, 1),
-    hair: new THREE.SphereGeometry(0.265, 24, 12, 0, Math.PI * 2, 0, Math.PI * 0.55),
-    nose: new THREE.SphereGeometry(0.05, 10, 8),
+    nose: new THREE.SphereGeometry(0.045, 10, 8).scale(0.75, 1, 0.9),
+    eye: new THREE.SphereGeometry(0.03, 10, 8).scale(0.8, 1.15, 0.45),
+    brow: new RoundedBoxGeometry(0.095, 0.024, 0.03, 1, 0.01),
+    // --- Hair (head space, modelled for the comic-size head) ---
+    // Short crop: high at the forehead, down to the ears at the sides, to the nape at the back.
+    hair: hairCap(hairline(0.36 * Math.PI, 0.5 * Math.PI, 0.86 * Math.PI), (t) => 0.02 - 0.012 * t * t),
+    // Long hair: a shell round the back and sides of the head, falling to the shoulders.
+    hairLong: new THREE.SphereGeometry(0.272, 22, 10, Math.PI / 2 + 1.05, Math.PI * 2 - 2.1, Math.PI * 0.32, Math.PI * 0.5)
+      .scale(1, 1.55, 1),
+    ponytail: taperedLimb(0.32, 0.065, 0.035),
+    bun: new THREE.SphereGeometry(0.1, 14, 10),
+    // Afro: a big soft rounded mass, fullest at the crown and sides, framing the face.
+    // (thinner over the forehead so it doesn't hang over the eyes).
+    afro: hairCap(
+      hairline(0.33 * Math.PI, 0.58 * Math.PI, 0.86 * Math.PI),
+      (t, a) => 0.02 + 0.1 * (0.45 + 0.55 * Math.min(1, a / 1.6)) * Math.sin(Math.PI * Math.min(1, 0.3 + 0.75 * t)),
+      { rings: 14 },
+    ),
     // --- Clothing & accessories ---
     placket: new RoundedBoxGeometry(0.22, 0.58, 0.06, 2, 0.03), // shirt showing through an open jacket
     neckline: new THREE.SphereGeometry(0.15, 16, 10).scale(1, 0.75, 0.75), // shirt showing at an open neck
@@ -118,7 +153,10 @@ function pedGeometry() {
     gunSlide: new RoundedBoxGeometry(0.075, 0.27, 0.09, 1, 0.015).translate(0, -0.1, 0.02),
     gunGrip: new RoundedBoxGeometry(0.07, 0.08, 0.16, 1, 0.015).rotateX(-0.25).translate(0, 0.01, -0.08),
   };
-  for (const g of Object.values(sharedGeo)) g.userData.shared = true;
+  for (const [name, g] of Object.entries(sharedGeo)) {
+    g.userData.shared = true;
+    g.userData.name = name; // lets body-shape morphs treat parts differently
+  }
   return sharedGeo;
 }
 
@@ -136,11 +174,14 @@ const BASE_SCALE = 1.3; // exaggerated so people read clearly from the high came
 const SLOTS = [
   'shirt', // outer torso (jacket when open)
   'inner', // shirt under an open jacket
-  'sleeve', 'pants', 'shoe', 'skin', 'hair', 'hat', 'hatTrim', 'mask', 'epaulette', 'belt', 'stripe', 'sleeveStripe',
+  'sleeve', 'pants', 'shoe', 'skin', 'hair', 'eye', 'hat', 'hatTrim', 'mask', 'epaulette', 'belt', 'stripe', 'sleeveStripe',
   // Accessory colours shared by everyone.
   'gold', 'black', 'lens', 'grip',
 ];
-const FIXED_COLORS = { gold: 0xf2c230, black: 0x141416, lens: 0x101418, grip: 0x4a3426 };
+const FIXED_COLORS = { gold: 0xf2c230, black: 0x141416, lens: 0x101418, grip: 0x4a3426, eye: 0x1e1612 };
+
+/** Hairstyles that don't fit under a cap are worn short (see outfits.js for the styles). */
+const UNDER_HAT = { afro: 'short', bun: 'short' };
 
 /** Every part baked into one geometry; built once and shared (every person has the same rig). */
 let sharedSkin = null;
@@ -153,6 +194,17 @@ function skinGeometry(root, bones, isBone, joints) {
     if (!part) return;
     const bone = boneOf(o, isBone);
     const geo = toRestPose(bindPart(part.geo, o, bone, bones.indexOf(bone), part.slot), bone);
+    // Body-shape morphs, worked out in the space of the body region the part belongs to.
+    let r = o;
+    while (!r.userData.region) r = r.parent;
+    const region = r.userData.region;
+    const toRegion = r.matrixWorld.clone().invert();
+    const fromRegion = new THREE.Matrix3().setFromMatrix4(r.matrixWorld);
+    const local = new THREE.Vector3();
+    addMorphs(geo, MORPHS.length, (k, p, out) => {
+      local.copy(p).applyMatrix4(toRegion);
+      morphDelta(MORPHS[k], region, part.geo.userData.name, local, out).applyMatrix3(fromRegion);
+    });
     parts.push(blendJoints(geo, bone, bones, joints, root));
   });
   sharedSkin = mergeGeometries(parts);
@@ -217,6 +269,9 @@ export class Pedestrian {
       belt = null,
       stripes = null,
       scale = 1,
+      hairStyle = 'short',
+      body = {},
+      face = {},
     } = look;
     const m = this.mats;
     const a = this.acc;
@@ -246,13 +301,32 @@ export class Pedestrian {
     if (mask !== null) m.mask.color.set(mask);
 
     for (const [type, g] of Object.entries(a.hats)) showBone(g, hat?.type === type);
-    // Hats that cover the whole crown hide the hair; caps leave a fringe showing.
-    showBone(this.hairMesh, !hat || hat.type === 'cap' || hat.type === 'police');
+    // Hats that cover the whole crown hide the hair; caps leave it showing (big styles worn short).
+    const hairOut = !hat || hat.type === 'cap' || hat.type === 'police';
+    const shown = hairOut ? (hat ? UNDER_HAT[hairStyle] ?? hairStyle : hairStyle) : null;
+    for (const [name, g] of Object.entries(a.hair)) showBone(g, name === shown);
+
+    this.#shape(body, face);
     if (hat) {
       m.hat.color.set(hat.color);
       m.hatTrim.color.set(hat.trim ?? hat.color);
       a.hats.cap.rotation.y = hat.backwards ? Math.PI : 0;
     }
+  }
+
+  /** Body build and face shape (see bodyShapes.js): morph weights plus a few bone offsets. */
+  #shape({ heavy = 0, broad = 0, curvy = 0 }, { jaw = 0, long = 0, size = 1 }) {
+    const w = this.skin.morphTargetInfluences;
+    const values = { heavy, broad, curvy, jaw, long };
+    MORPHS.forEach((name, k) => (w[k] = values[name]));
+    // Shoulders and hips move out (or in) to sit on the reshaped body.
+    const shoulderX = 0.325 + 0.025 * heavy + 0.03 * broad - 0.03 * curvy;
+    this.armL.position.x = shoulderX;
+    this.armR.position.x = -shoulderX;
+    const hipX = 0.13 + 0.012 * heavy + 0.03 * curvy - 0.006 * broad;
+    this.legL.position.x = hipX;
+    this.legR.position.x = -hipX;
+    this.headPivot.scale.setScalar(HEAD_SCALE * size);
   }
 
   get speed() {
@@ -485,6 +559,7 @@ export class Pedestrian {
 
   #buildMesh() {
     const root = new THREE.Group();
+    root.userData.region = 'none';
     root.scale.setScalar(BASE_SCALE);
     const body = new THREE.Group(); // pivots at the feet for falling over
     root.add(body);
@@ -514,11 +589,14 @@ export class Pedestrian {
       const out = Math.sign(x);
       const hip = new THREE.Group();
       hip.position.set(x, HIP_Y, 0);
+      hip.userData.region = 'thigh';
       const knee = new THREE.Group();
       knee.position.y = -THIGH;
+      knee.userData.region = 'shin';
       hip.add(part(G.thigh, m.pants), stripe(G.thighStripe, m.stripe, out), knee);
       const ankle = new THREE.Group();
       ankle.position.y = -SHIN + 0.02;
+      ankle.userData.region = 'none';
       ankle.add(part(G.shoe, m.shoe, 0, -0.04, 0.06));
       knee.add(part(G.shin, m.pants), stripe(G.shinStripe, m.stripe, out), ankle);
       return [hip, knee, ankle];
@@ -527,8 +605,10 @@ export class Pedestrian {
       const out = Math.sign(x);
       const shoulder = new THREE.Group();
       shoulder.position.set(x, 0.3, 0);
+      shoulder.userData.region = 'upperArm';
       const elbow = new THREE.Group();
       elbow.position.y = -UPPER_ARM;
+      elbow.userData.region = 'forearm';
       shoulder.add(part(G.upperArm, m.sleeve), stripe(G.armStripe, m.sleeveStripe, out), elbow);
       const hand = part(G.hand, m.skin, 0, -FOREARM - 0.03, 0);
       elbow.add(part(G.forearm, m.sleeve), hand);
@@ -540,19 +620,48 @@ export class Pedestrian {
 
     const torso = new THREE.Group();
     torso.position.y = TORSO_Y;
+    torso.userData.region = 'torso';
     this.torso = torso;
     body.add(torso);
     // Everything on the head hangs off one pivot at its centre, scaled down to adult proportions.
     const headPivot = new THREE.Group();
     headPivot.position.y = HEAD_Y;
     headPivot.scale.setScalar(HEAD_SCALE);
+    headPivot.userData.region = 'head';
+    this.headPivot = headPivot;
     const head = part(G.head, m.skin);
-    head.add(part(G.ear, m.skin, 0.235, -0.02, -0.01), part(G.ear, m.skin, -0.235, -0.02, -0.01));
-    const hairMesh = part(G.hair, m.hair, 0, 0.02, -0.02);
-    hairMesh.rotation.x = -0.35; // hairline sits back from the face
-    this.hairMesh = hairMesh;
-    const nose = part(G.nose, m.skin, 0, -0.02, 0.24); // shows which way they face
-    headPivot.add(head, hairMesh, nose);
+    const earX = sculptHead(new THREE.Vector3(0.25, -0.02, -0.01)).x;
+    head.add(part(G.ear, m.skin, earX, -0.02, -0.01), part(G.ear, m.skin, -earX, -0.02, -0.01));
+    // Face: eyes, brows (hair coloured) and a nose that shows which way they face.
+    const onFace = (geo, mt, x, y, inset, tilt = 0) => {
+      const o = part(geo, mt);
+      o.position.copy(onHead(x, y, inset));
+      o.rotation.set(-y * 0.8, x * 0.9, tilt); // lie flat on the curve of the face
+      return o;
+    };
+    head.add(
+      onFace(G.eye, m.eye, 0.34, 0.1, 0.004), onFace(G.eye, m.eye, -0.34, 0.1, 0.004),
+      onFace(G.brow, m.hair, 0.35, 0.3, 0.004, -0.12), onFace(G.brow, m.hair, -0.35, 0.3, 0.004, 0.12),
+      onFace(G.nose, m.skin, 0, -0.06, 0.012),
+    );
+    // Hairstyles: one group each, one shown at a time.
+    const crop = () => part(G.hair, m.hair);
+    const style = (...parts) => {
+      const g = new THREE.Group();
+      g.add(...parts);
+      headPivot.add(g);
+      return g;
+    };
+    const tail = part(G.ponytail, m.hair, 0, 0.06, -0.26);
+    tail.rotation.x = 0.12; // hangs down, just off the back of the head
+    acc.hair = {
+      short: style(crop()),
+      long: style(crop(), part(G.hairLong, m.hair, 0, -0.03, -0.015)),
+      ponytail: style(crop(), tail),
+      bun: style(crop(), part(G.bun, m.hair, 0, 0.21, -0.17)),
+      afro: style(part(G.afro, m.hair)),
+    };
+    headPivot.add(head);
     torso.add(part(G.chest, m.shirt), part(G.hips, m.pants), part(G.neck, m.skin, 0, 0.45, 0), headPivot);
     [this.armL, this.elbowL] = arm(0.325);
     let handR;
@@ -620,7 +729,7 @@ export class Pedestrian {
     // --- One skinned mesh for the lot ---
     // Bones: every pivot (group), plus each part that can be shown / hidden. Fixed parts are
     // baked into the nearest bone above them.
-    const toggles = new Set([this.hairMesh, acc.gun, acc.placket, acc.collar, acc.chain, acc.badge, acc.radio,
+    const toggles = new Set([acc.gun, acc.placket, acc.collar, acc.chain, acc.badge, acc.radio,
       acc.belt, acc.holster, acc.glasses, acc.mask, ...acc.epaulettes, ...Object.values(acc.hats)]);
     const isBone = (o) => o !== root && (!o.userData.part || toggles.has(o));
     const bones = [];
@@ -632,6 +741,7 @@ export class Pedestrian {
     skinned.castShadow = true;
     skinned.layers.set(CHAR_LAYER); // InkRenderer tags people so their own joints aren't inked
     root.add(skinned);
+    this.skin = skinned;
     showBone(acc.gun, false);
     return root;
   }

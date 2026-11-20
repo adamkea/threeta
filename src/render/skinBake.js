@@ -143,3 +143,48 @@ export function blendJoints(geo, bone, bones, joints, space) {
   }
   return geo;
 }
+
+const _q = new THREE.Vector3();
+const _dq = new THREE.Vector3();
+
+/**
+ * Give a part (already in rest-pose world space, see toRestPose) `count` relative morph
+ * targets. `delta(k, p, out)` writes the displacement of point `p` for target `k`. Normal
+ * changes come from recomputing normals on the moved surface and taking the difference, so
+ * shading follows the new shape (and any seams in the recomputed normals cancel out).
+ */
+export function addMorphs(geo, count, delta) {
+  const pos = geo.getAttribute('position');
+  const n = pos.count;
+  const normalsOf = (positions) => {
+    const g = new THREE.BufferGeometry();
+    g.setIndex(geo.index);
+    g.setAttribute('position', positions);
+    g.computeVertexNormals();
+    return g.getAttribute('normal').array;
+  };
+  const base = normalsOf(pos);
+  geo.morphAttributes.position = [];
+  geo.morphAttributes.normal = [];
+  for (let k = 0; k < count; k++) {
+    const dp = new Float32Array(n * 3);
+    const moved = new Float32Array(n * 3);
+    let any = false;
+    for (let i = 0; i < n; i++) {
+      _q.fromBufferAttribute(pos, i);
+      delta(k, _q, _dq);
+      if (_dq.x || _dq.y || _dq.z) any = true;
+      dp[i * 3] = _dq.x, dp[i * 3 + 1] = _dq.y, dp[i * 3 + 2] = _dq.z;
+      moved[i * 3] = _q.x + _dq.x, moved[i * 3 + 1] = _q.y + _dq.y, moved[i * 3 + 2] = _q.z + _dq.z;
+    }
+    const dn = new Float32Array(n * 3);
+    if (any) {
+      const nm = normalsOf(new THREE.BufferAttribute(moved, 3));
+      for (let i = 0; i < n * 3; i++) dn[i] = nm[i] - base[i];
+    }
+    geo.morphAttributes.position.push(new THREE.Float32BufferAttribute(dp, 3));
+    geo.morphAttributes.normal.push(new THREE.Float32BufferAttribute(dn, 3));
+  }
+  geo.morphTargetsRelative = true;
+  return geo;
+}
