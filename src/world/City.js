@@ -4,6 +4,7 @@ import { toon } from '../render/toon.js';
 import { createLandmark } from './Landmarks.js';
 import { createPayPhones } from './PayPhones.js';
 import { createStreetGrime } from './StreetGrime.js';
+import { createWater } from './Water.js';
 import { CITY, LAYOUT, LOT, WATER_Y, blockAt, groundHeight, offIsland, toWorld } from './CityLayout.js';
 import {
   bounds, centroid, clipHalfPlane, insideConvex, isAxisRect, offsetConvex, offsetConvexPaired, signedArea,
@@ -30,7 +31,8 @@ export function createCity(seed = 1337) {
   const colliders = [];
   const { blocks } = LAYOUT;
 
-  group.add(createGround());
+  const water = createWater(CITY.half, WATER_Y, CITY.size * 6);
+  group.add(createGround(), water.mesh);
   group.add(createRoadMarkings());
 
   const walls = new QuadBuilder();
@@ -90,8 +92,11 @@ export function createCity(seed = 1337) {
     landmarks,
     parkingSpots: parking.spots,
     payPhones: payPhones.phones,
-    /** Per-frame animation of the city dressing (manhole steam). */
-    update: grime.update,
+    /** Per-frame animation of the city dressing (manhole steam) and the sea. */
+    update(dt) {
+      grime.update(dt);
+      water.update(dt);
+    },
   };
 }
 
@@ -308,12 +313,6 @@ function createGround() {
   asphalt.rotation.x = -Math.PI / 2;
   asphalt.receiveShadow = true;
   g.add(asphalt);
-
-  // Water surrounding the island city.
-  const water = new THREE.Mesh(new THREE.PlaneGeometry(CITY.size * 6, CITY.size * 6), toon({ color: 0x2f8fb8 }));
-  water.rotation.x = -Math.PI / 2;
-  water.position.y = WATER_Y;
-  g.add(water);
 
   // Open quayside: the island is a slab standing in the sea, with no wall to stop you going over.
   const quay = new THREE.Mesh(new THREE.BoxGeometry(CITY.size, 4, CITY.size), toon({ color: 0x9a9384 }));
