@@ -232,7 +232,7 @@ export function buildShore(curbIn, rng, kindAt) {
  */
 function berthShips(segs, coast, at) {
   const ships = [];
-  const LENGTH = 60, BEAM = 12, GAP = 1.2;
+  const LENGTH = 48, BEAM = 11, GAP = 1.2;
   for (const s of segs) {
     if (!s.yard || !s.prev.yard || !s.next.yard) continue;
     const mid = at(s.i, 0), mid1 = at(s.j, 0);
@@ -249,7 +249,7 @@ function berthShips(segs, coast, at) {
       for (const v of [-near + 0.3, 0, near]) {
         if (inPolygon(coast, ax - s.nx * v, az - s.nz * v)) ok = false;
       }
-      if (!inPolygon(coast, ax - s.nx * (near + 3.5), az - s.nz * (near + 3.5))) ok = false;
+      if (!inPolygon(coast, ax - s.nx * (near + 5), az - s.nz * (near + 5))) ok = false;
     }
     if (!ok) continue;
     const hl = LENGTH / 2, hb = BEAM / 2;

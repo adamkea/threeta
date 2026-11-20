@@ -139,9 +139,12 @@ draws from that graph.
   warp across town and a little jitter per junction. Streets curve gently and blocks become skewed
   quadrilaterals.
 - **An island, not a square:** the lattice is bigger than the island. An irregular outline (a squashed
-  blob with lobes, a harbour bay on the east coast, a headland to the south-west: `islandShape()`)
-  decides which part of it is land. A **coast road** runs round the edge: marching squares over the
-  lattice give it one straight stretch per cell it crosses, so the blocks it trims stay convex.
+  blob with lobes and a harbour bay on the east coast: `islandShape()`) decides which blocks are land:
+  a block with all four corners on the island is kept whole, one with three is cut corner to corner
+  into a triangle. A tidy-up pass drops blocks that stick out on their own, sharp points and thin
+  wedges, and fills notches. The **coast road** round the edge therefore only runs along ordinary
+  streets or straight across a block, so every junction on it is a plain street corner. The diagonal
+  avenues stop one junction short of it.
 - **Avenues:** one wide (18 m) avenue each way, and **two diagonal avenues** cutting corner to corner
   through runs of blocks. They split those blocks into triangles and make big 6-way junctions with
   three-phase signals.

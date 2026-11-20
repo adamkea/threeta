@@ -275,103 +275,180 @@ function generate(seed) {
     }
   }
 
-  // --- The coastline: an irregular blob (see islandDistance). Junctions within SNAP metres of
-  // it count as on it, so the coast road never leaves a stub of street shorter than that.
+  // --- The coastline: an irregular blob (see islandDistance) decides which lattice blocks are
+  // land. A block with all four corners on the island is kept whole; one with three is cut
+  // corner to corner into a triangle. So the coast road only ever runs along existing streets or
+  // straight across a block, and every junction on it is an ordinary street corner: no stubs,
+  // no slivers.
   const shape = islandShape(rng);
-  const SNAP = 12;
-  const val = pos.map((col) => col.map((p) => {
-    const v = islandDistance(shape, p.x, p.z);
-    return Math.abs(v) < SNAP ? 0 : v;
-  }));
-  const inside = (i, j) => i >= 0 && j >= 0 && i <= N && j <= N && val[i][j] <= 0;
-  const solid = (i, j) => inside(i, j) && val[i][j] < 0; // inside and not on the coast
-  // Interior: the junction and everything round it is solid, so its streets are ordinary crossroads.
-  const deep = (i, j) => [[0, 0], [1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [1, -1], [-1, 1], [-1, -1]].every(([a, b]) => solid(i + a, j + b));
-  const cellSolid = (i, j) => solid(i, j) && solid(i + 1, j) && solid(i, j + 1) && solid(i + 1, j + 1);
+  const val = pos.map((col) => col.map((p) => islandDistance(shape, p.x, p.z)));
+  const inside = (i, j) => i >= 0 && j >= 0 && i <= N && j <= N && val[i][j] < 0;
+  const corners = (i, j) => [[i, j], [i + 1, j], [i + 1, j + 1], [i, j + 1]]; // round the cell
+  // A block: whole (out = -1), or a triangle without corner `out`, its right angle opposite.
+  const makeCell = (i, j, out) => {
+    const c = corners(i, j);
+    if (out < 0) return { pts: c, out };
+    return { pts: [c[(out + 1) % 4], c[(out + 2) % 4], c[(out + 3) % 4]], right: c[(out + 2) % 4], out };
+  };
+  // land[i][j]: null, or the block's corners round it (4 = whole, 3 = triangle) and, for a
+  // triangle, its right-angle corner.
+  const land = [];
+  for (let i = 0; i < N; i++) {
+    land.push([]);
+    for (let j = 0; j < N; j++) {
+      const c = corners(i, j);
+      const inn = c.map(([a, b]) => inside(a, b));
+      const n = inn.filter(Boolean).length;
+      land[i].push(n === 4 ? makeCell(i, j, -1) : n === 3 && wideTriangle(i, j, inn.indexOf(false)) ? makeCell(i, j, inn.indexOf(false)) : null);
+    }
+  }
+  const cellAt = (i, j) => (i >= 0 && j >= 0 && i < N && j < N ? land[i][j] : null);
+  // Where the lattice is skewed, a block cut corner to corner can leave a thin wedge, which meets
+  // the coast road at a sharp angle. Only cut blocks whose triangle has no angle under 32 degrees.
+  function wideTriangle(i, j, out) {
+    const t = makeCell(i, j, out).pts.map(([a, b]) => pos[a][b]);
+    return t.every((p, k) => {
+      const q = t[(k + 1) % 3], r = t[(k + 2) % 3];
+      const ux = q.x - p.x, uz = q.z - p.z, vx = r.x - p.x, vz = r.z - p.z;
+      return Math.acos((ux * vx + uz * vz) / (Math.hypot(ux, uz) * Math.hypot(vx, vz))) > (32 * Math.PI) / 180;
+    });
+  }
+  const same = (p, q) => p[0] === q[0] && p[1] === q[1];
+
+  // Tidy the coastline: take off blocks that stick out on their own (joined to the rest along one
+  // street or none), and fill notches (a gap with land on three sides becomes a block; one in an
+  // inside corner gets a triangle across it). Sides: 0 north, 1 east, 2 south, 3 west.
+  const STEP = [[0, -1], [1, 0], [0, 1], [-1, 0]];
+  const hasSide = (cl, m) => !!cl && (cl.out < 0 || m === (cl.out + 1) % 4 || m === (cl.out + 2) % 4);
+  const joined = (i, j, m) => hasSide(cellAt(i + STEP[m][0], j + STEP[m][1]), (m + 2) % 4);
+  const tidy = () => {
+    let changed = false;
+    for (let pass = 0; pass < 12; pass++) {
+      let any = false;
+      for (let i = 0; i < N; i++) {
+        for (let j = 0; j < N; j++) {
+          const cl = land[i][j];
+          const links = [0, 1, 2, 3].filter((m) => joined(i, j, m) && (!cl || hasSide(cl, m)));
+          if (cl && links.length <= 1) (land[i][j] = null), (any = true);
+          else if (!cl && links.length >= 3) (land[i][j] = makeCell(i, j, -1)), (any = true);
+          else if (!cl && links.length === 2 && (links[1] - links[0] === 1 || links[1] - links[0] === 3)) {
+            const m = links[1] - links[0] === 1 ? links[0] : links[1]; // the first of the two, going round
+            if (wideTriangle(i, j, (m + 3) % 4)) {
+              land[i][j] = makeCell(i, j, (m + 3) % 4);
+              any = true;
+            }
+          } else if (cl && cl.out >= 0 && links.length >= 3) (land[i][j] = makeCell(i, j, -1)), (any = true);
+        }
+      }
+      if (!any) break;
+      changed = true;
+    }
+    return changed;
+  };
+
+  // No pinches: where two pieces of land would touch at a single junction, the coast road would
+  // run through it twice. Drop a piece there (a triangle if there is one) until none are left.
+  // Sharp points of land go the same way.
+  const covers = (cl, node, toward) => {
+    if (!cl) return false;
+    if (cl.pts.length === 4) return true;
+    if (!cl.pts.some((p) => same(p, node))) return false;
+    return same(cl.right, node) || same(cl.right, toward);
+  };
+  for (let changed = true; changed; ) {
+    changed = tidy();
+    for (let i = 0; i <= N && !changed; i++) {
+      for (let j = 0; j <= N && !changed; j++) {
+        // The four blocks round the junction in turn, each split into the halves next to its two streets.
+        const round = [[i, j, 0], [i - 1, j, 1], [i - 1, j - 1, 2], [i, j - 1, 3]];
+        const slots = [];
+        for (const [ci, cj, k] of round) {
+          const c = corners(ci, cj);
+          slots.push(covers(cellAt(ci, cj), [i, j], c[(k + 1) % 4]), covers(cellAt(ci, cj), [i, j], c[(k + 3) % 4]));
+        }
+        let arcs = 0;
+        for (let k = 0; k < 8; k++) if (slots[k] && !slots[(k + 7) % 8]) arcs++;
+        // How much land there is round the junction, as an angle: a sharp point of land (less
+        // than ~100 degrees) makes a pointed headland, so trim it (a square corner gets cut back
+        // to a triangle by tidy()).
+        let angle = 0;
+        round.forEach(([ci, cj, k], r) => {
+          if (!cellAt(ci, cj)) return;
+          const c = corners(ci, cj);
+          const P = pos[i][j], D = pos[c[(k + 2) % 4][0]][c[(k + 2) % 4][1]];
+          for (const [h, m] of [[0, (k + 1) % 4], [1, (k + 3) % 4]]) {
+            if (!slots[r * 2 + h]) continue;
+            const E = pos[c[m][0]][c[m][1]];
+            const a1 = Math.atan2(E.z - P.z, E.x - P.x), a2 = Math.atan2(D.z - P.z, D.x - P.x);
+            angle += Math.abs(Math.atan2(Math.sin(a1 - a2), Math.cos(a1 - a2)));
+          }
+        });
+        const spike = angle > 0 && angle < (100 * Math.PI) / 180;
+        if (arcs < 2 && !spike) continue;
+        const touching = round.filter(([ci, cj]) => cellAt(ci, cj));
+        const drop = touching.find(([ci, cj]) => cellAt(ci, cj).pts.length === 3) ?? touching[0];
+        land[drop[0]][drop[1]] = null;
+        changed = true;
+      }
+    }
+  }
+
+  // Every block's sides, as streets: lattice streets, or the cut across a triangle.
+  const sideKey = (p, q) => {
+    const a = p[0] * 1000 + p[1], b = q[0] * 1000 + q[1];
+    return a < b ? `${a}-${b}` : `${b}-${a}`;
+  };
+  const sides = new Map(); // key -> { p, q, uses }
+  const kept = [];
+  for (let i = 0; i < N; i++) for (let j = 0; j < N; j++) if (land[i][j]) kept.push([i, j]);
+  const sidesOf = ([i, j]) => land[i][j].pts.map((p, k, pts) => [p, pts[(k + 1) % pts.length]]);
+  // Keep only the biggest piece of land (blocks joined along a street).
+  const owner = new Map();
+  for (const c of kept) for (const [p, q] of sidesOf(c)) {
+    const k = sideKey(p, q);
+    if (!owner.has(k)) owner.set(k, []);
+    owner.get(k).push(c);
+  }
+  const comp = new Map();
+  let best = null;
+  for (const c of kept) {
+    if (comp.has(c)) continue;
+    const piece = [c];
+    comp.set(c, piece);
+    for (let k = 0; k < piece.length; k++) {
+      for (const [p, q] of sidesOf(piece[k])) {
+        for (const o of owner.get(sideKey(p, q))) if (!comp.has(o)) (comp.set(o, piece), piece.push(o));
+      }
+    }
+    if (!best || piece.length > best.length) best = piece;
+  }
+  for (const c of kept) if (comp.get(c) !== best) land[c[0]][c[1]] = null;
+  for (const c of best) {
+    for (const [p, q] of sidesOf(c)) {
+      const k = sideKey(p, q);
+      if (!sides.has(k)) sides.set(k, { p, q, uses: 0 });
+      sides.get(k).uses++;
+    }
+  }
 
   const g = new RoadGraph();
-  const grid = pos.map((col, i) => col.map((p, j) => (inside(i, j) ? g.addNode(p.x, p.z) : -1)));
-
-  // Where the coast crosses a lattice street that runs from a solid junction out to sea: found by
-  // bisection, so it really is on the curve. Keyed by the street's lattice ends.
-  const crossings = new Map();
-  const crossing = (i0, j0, i1, j1) => {
-    if (val[i0][j0] > 0) [i0, j0, i1, j1] = [i1, j1, i0, j0]; // (i0, j0) inside
-    const key = `${i0},${j0},${i1},${j1}`;
-    if (crossings.has(key)) return crossings.get(key);
-    let id;
-    if (val[i0][j0] === 0) id = grid[i0][j0]; // the junction is on the coast
-    else {
-      const A = pos[i0][j0], B = pos[i1][j1];
-      let lo = 0, hi = 1;
-      for (let k = 0; k < 30; k++) {
-        const t = (lo + hi) / 2;
-        if (islandDistance(shape, A.x + (B.x - A.x) * t, A.z + (B.z - A.z) * t) < 0) lo = t;
-        else hi = t;
-      }
-      id = g.addNode(A.x + (B.x - A.x) * lo, A.z + (B.z - A.z) * lo);
-    }
-    crossings.set(key, id);
-    return id;
-  };
-
-  // Lattice streets: whole where both ends are on the island, cut short at the coast otherwise.
-  const edgeKey = new Map(); // "a,b" node pair -> edge id
-  const link = (a, b, width, kind) => {
-    if (a === b) return -1;
-    const key = a < b ? `${a},${b}` : `${b},${a}`;
-    if (edgeKey.has(key)) return edgeKey.get(key);
-    const e = g.addEdge(a, b, width, kind);
-    edgeKey.set(key, e);
-    return e;
-  };
-  const street = (i0, j0, i1, j1, width, kind) => {
-    const ia = inside(i0, j0), ib = inside(i1, j1);
-    if (ia && ib) return link(grid[i0][j0], grid[i1][j1], width, kind);
-    if (!ia && !ib) return -1;
-    const [i, j] = ia ? [i0, j0] : [i1, j1];
-    return link(grid[i][j], crossing(i0, j0, i1, j1), width, kind);
-  };
+  const grid = pos.map((col) => col.map(() => -1));
+  const node = ([i, j]) => (grid[i][j] >= 0 ? grid[i][j] : (grid[i][j] = g.addNode(pos[i][j].x, pos[i][j].z)));
   const hEdge = [], vEdge = []; // hEdge[i][j]: (i,j)-(i+1,j) along X; vEdge[i][j]: (i,j)-(i,j+1) along Z
-  for (let i = 0; i <= N; i++) {
-    hEdge.push([]);
-    vEdge.push([]);
-    for (let j = 0; j <= N; j++) {
-      if (i < N) hEdge[i][j] = street(i, j, i + 1, j, wz(j), j === avZ ? 'avenue' : 'street');
-      if (j < N) vEdge[i][j] = street(i, j, i, j + 1, wx(i), i === avX ? 'avenue' : 'street');
-    }
+  for (let i = 0; i <= N; i++) (hEdge[i] = []), (vEdge[i] = []);
+  for (const { p, q, uses } of sides.values()) {
+    const coast = uses === 1; // land on one side only: the coast road
+    let width = COAST, kind = 'coast';
+    if (p[1] === q[1] && !coast) (width = wz(p[1])), (kind = p[1] === avZ ? 'avenue' : 'street');
+    if (p[0] === q[0] && !coast) (width = wx(p[0])), (kind = p[0] === avX ? 'avenue' : 'street');
+    const e = g.addEdge(node(p), node(q), width, kind);
+    if (p[1] === q[1]) hEdge[Math.min(p[0], q[0])][p[1]] = e;
+    else if (p[0] === q[0]) vEdge[p[0]][Math.min(p[1], q[1])] = e;
   }
-
-  // --- The coast road: marching squares over the lattice cells. Each cell the coast passes
-  // through gets one straight stretch between the two streets it cuts, so every block it trims
-  // stays convex. A stretch that lands on an existing street just takes that street over.
-  const coastEdges = new Set();
-  for (let i = 0; i < N; i++) {
-    for (let j = 0; j < N; j++) {
-      const c = [[i, j], [i + 1, j], [i + 1, j + 1], [i, j + 1]]; // round the cell
-      const inn = c.map(([a, b]) => inside(a, b));
-      if (inn.every(Boolean) || !inn.some(Boolean)) continue;
-      const cuts = []; // crossing node on each side of the cell where the coast crosses it
-      for (let k = 0; k < 4; k++) {
-        const [a0, b0] = c[k], [a1, b1] = c[(k + 1) % 4];
-        if (inn[k] !== inn[(k + 1) % 4]) cuts.push({ k, id: crossing(a0, b0, a1, b1) });
-      }
-      let pairs;
-      if (cuts.length === 2) pairs = [[cuts[0].id, cuts[1].id]];
-      else {
-        // Saddle (opposite corners on the island): join round the corners that are on land.
-        const first = inn[0] ? 1 : 0;
-        pairs = [[cuts[first].id, cuts[(first + 1) % 4].id], [cuts[(first + 2) % 4].id, cuts[(first + 3) % 4].id]];
-      }
-      for (const [a, b] of pairs) {
-        const e = link(a, b, COAST, 'coast');
-        if (e < 0) continue;
-        g.edges[e].width = COAST;
-        g.edges[e].kind = 'coast';
-        coastEdges.add(e);
-      }
-    }
-  }
+  const full = (i, j) => cellAt(i, j)?.pts.length === 4;
+  const cellSolid = full;
+  // Interior: all four blocks round the junction are whole, so its streets are ordinary crossroads.
+  const deep = (i, j) => full(i, j) && full(i - 1, j) && full(i - 1, j - 1) && full(i, j - 1);
 
   // --- Diagonal avenues, cutting corner to corner through runs of solid blocks ---
   const reserved = new Set(); // blocks (bx * 100 + bz) that can't be merged
@@ -380,7 +457,7 @@ function generate(seed) {
     for (let k = 0; k + 1 < path.length; k++) {
       const [i0, j0] = path[k], [i1, j1] = path[k + 1];
       const ci = Math.min(i0, i1), cj = Math.min(j0, j1);
-      if (!cellSolid(ci, cj)) continue;
+      if (!cellSolid(ci, cj) || !deep(i0, j0) || !deep(i1, j1)) continue; // stop short of the coast road
       g.addEdge(grid[i0][j0], grid[i1][j1], DIAGONAL, 'avenue');
       reserved.add(ci * 100 + cj);
       diagNodes.add(grid[i0][j0]).add(grid[i1][j1]);
@@ -484,7 +561,7 @@ function generate(seed) {
  */
 function islandShape(rng) {
   return {
-    R: 300,
+    R: 328,
     sx: 0.86, // narrower east-west than north-south
     sz: 1.12,
     // [harmonic, amplitude, phase]: low ones give the overall lobes, higher ones the bays.
