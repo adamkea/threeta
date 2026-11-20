@@ -14,6 +14,7 @@ const GRASS = '#5fae3f';
 const SAND = '#ecd79c';
 const DOCK = '#a9a69d';
 const WOOD = '#9b7a52';
+const SHIP = '#7a2a22';
 const MARGIN = 18; // metres of water shown round the island
 
 // The square of the world the map shows: centred on the island, big enough for all of it.
@@ -89,7 +90,7 @@ export class CityMap {
     // piers, then the asphalt of the road network inside it.
     const shore = LAYOUT.shore;
     for (const sg of shore.segs) {
-      g.fillStyle = sg.type === 'dock' ? DOCK : SAND;
+      g.fillStyle = { beach: SAND, wharf: WOOD, seawall: SIDEWALK }[sg.kind] ?? DOCK;
       path([sg.quad[0], sg.quad[1], shore.at(sg.j, sg.w1), shore.at(sg.i, sg.w0)]);
       g.fill();
       g.strokeStyle = g.fillStyle; // hide hairline seams between the pieces
@@ -103,6 +104,14 @@ export class CityMap {
     for (const p of shore.piers) {
       path(p.poly);
       g.fill();
+    }
+    g.fillStyle = SHIP;
+    g.strokeStyle = INK;
+    g.lineWidth = Math.max(1, 0.35 * s);
+    for (const p of shore.ships) {
+      path(p.poly);
+      g.fill();
+      g.stroke();
     }
     g.fillStyle = ROAD;
     path(shore.curb);

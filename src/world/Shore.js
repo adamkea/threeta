@@ -12,6 +12,8 @@ const FLOOR = WATER_LEVEL - 2.5; // how far walls reach down below the waterline
 const WHITE = new THREE.Color(0xffffff);
 const DOCK = new THREE.Color(0xb3b0a7);
 const QUAY = new THREE.Color(0x8f887a);
+const WHARF_FACE = new THREE.Color(0x7a5a38);
+const BARRIER = new THREE.Color(0xa29c90);
 const SAND = new THREE.Color(0xf0dca2);
 const WET_SAND = new THREE.Color(0xcdb07a);
 const SEABED = new THREE.Color(0x9a8a5e);
@@ -40,6 +42,7 @@ export function createShore(rng, shore, slabs, colliders) {
   const pierRoots = shore.piers.map((p) => ({ x: p.x0, z: p.z0, r: p.hw + 1.5, seg: p.seg }));
   const nearPier = (x, z, pad = 0) => pierRoots.some((r) => Math.hypot(r.x - x, r.z - z) < r.r + pad);
 
+  const piles = []; // timber piles along the wharf edge
   let sinceLamp = 15;
   for (const s of segs) {
     const { i, j } = s;
@@ -58,17 +61,37 @@ export function createShore(rng, shore, slabs, colliders) {
     }
 
     if (!beach) {
-      // Dock: concrete out to the quay wall, with a yellow line along the edge.
-      flat(slabs, [P(i, PROMENADE, y), P(j, PROMENADE, y), P(j, s.w1, y), P(i, s.w0, y)], DOCK);
-      wallFacing(slabs, at(i, s.w0), at(j, s.w1), FLOOR, y, QUAY, s.nx, s.nz);
-      const l0 = at(i, s.w0 - 1.2), l1 = at(j, s.w1 - 1.2), l2 = at(j, s.w1 - 0.9), l3 = at(i, s.w0 - 0.9);
-      flat(paint, [l0, l1, l2, l3].map((p) => [p.x, y + 0.012, p.z]), new THREE.Color(0xf2c230));
-      // Ends of the dock where it meets a beach (or a dock of another width).
-      if (s.prev.type !== 'dock' || Math.abs(s.prev.w1 - s.w0) > 0.01) {
-        wallFacing(slabs, at(i, PROMENADE), at(i, s.w0), FLOOR, y, QUAY, -s.dx, -s.dz);
+      const top = [P(i, PROMENADE, y), P(j, PROMENADE, y), P(j, s.w1, y), P(i, s.w0, y)];
+      const edge = s.kind === 'wharf' ? wood : slabs;
+      const face = s.kind === 'wharf' ? WHARF_FACE : QUAY;
+      if (s.kind === 'wharf') {
+        // Wharf: a boardwalk out to an edge of timber on piles.
+        flat(wood, top, WHITE, 0.5);
+        const steps = Math.max(1, Math.round(s.len / 3));
+        for (let k = 0; k < steps; k++) {
+          const t = (k + 0.5) / steps;
+          const a = at(i, s.w0 - 0.3), b = at(j, s.w1 - 0.3);
+          piles.push({ x: a.x + (b.x - a.x) * t, z: a.z + (b.z - a.z) * t });
+        }
+      } else if (s.kind === 'seawall') {
+        // Seawall: the promenade carries on to the edge, with a concrete barrier along the top.
+        flat(slabs, top, WHITE);
+        const a = at(i, s.w0 - 0.45), b = at(j, s.w1 - 0.45);
+        barrier(slabs, a, b, y, s.nx, s.nz);
+        colliders.push(segCollider(a, b, 0.35));
+      } else {
+        // Shipyard quay: concrete out to the quay wall, with a yellow line along the edge.
+        flat(slabs, top, DOCK);
+        const l0 = at(i, s.w0 - 1.2), l1 = at(j, s.w1 - 1.2), l2 = at(j, s.w1 - 0.9), l3 = at(i, s.w0 - 0.9);
+        flat(paint, [l0, l1, l2, l3].map((p) => [p.x, y + 0.012, p.z]), new THREE.Color(0xf2c230));
       }
-      if (s.next.type !== 'dock' || Math.abs(s.next.w0 - s.w1) > 0.01) {
-        wallFacing(slabs, at(j, PROMENADE), at(j, s.w1), FLOOR, y, QUAY, s.dx, s.dz);
+      wallFacing(edge, at(i, s.w0), at(j, s.w1), FLOOR, y, face, s.nx, s.nz);
+      // Ends where it meets a different kind of shore (or one of another width).
+      if (s.prev.kind !== s.kind || Math.abs(s.prev.w1 - s.w0) > 0.01) {
+        wallFacing(edge, at(i, PROMENADE), at(i, s.w0), FLOOR, y, face, -s.dx, -s.dz);
+      }
+      if (s.next.kind !== s.kind || Math.abs(s.next.w0 - s.w1) > 0.01) {
+        wallFacing(edge, at(j, PROMENADE), at(j, s.w1), FLOOR, y, face, s.dx, s.dz);
       }
       continue;
     }
@@ -133,6 +156,13 @@ export function createShore(rng, shore, slabs, colliders) {
       for (let u = 14; u < p.length - 4; u += 16) for (const v of [-p.hw + 0.6, p.hw - 0.6]) lamps.push([corner(u, v).x, corner(u, v).z, top]);
     }
   }
+  if (piles.length) {
+    const len = y - 0.2 - (WATER_LEVEL - 1.5);
+    const mesh = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.24, 0.24, len, 6), toon({ color: 0x5e4429 }), piles.length);
+    const m = new THREE.Matrix4();
+    piles.forEach((q, k) => mesh.setMatrixAt(k, m.makeTranslation(q.x, WATER_LEVEL - 1.5 + len / 2, q.z)));
+    group.add(mesh);
+  }
   if (posts.length) {
     const len = SHORE_Y.pier - 0.35 - (WATER_LEVEL - 1.5);
     const mesh = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.22, 0.22, len, 6), toon({ color: 0x6b4f33 }), posts.length);
@@ -141,33 +171,27 @@ export function createShore(rng, shore, slabs, colliders) {
     group.add(mesh);
   }
 
-  // --- Dock dressing: bollards along the quay edge, containers stacked back from it ---
-  const bollards = [];
+  // --- The shipyard: container yard, gantry cranes along the quay, ships tied up alongside ---
   const containers = [];
+  const stacks = []; // container stacks' footprints, for the map
+  const steel = new QuadBuilder(3);
+  const craneLegs = shipyard(rng, shore, steel, colliders, containers, stacks);
+  group.add(new THREE.Mesh(steel.build(), toon({ vertexColors: true })));
+  group.children.at(-1).castShadow = group.children.at(-1).receiveShadow = true;
+
+  // --- Bollards along the shipyard quay and the wharf edge ---
+  const bollards = [];
   for (const s of segs) {
-    if (s.type !== 'dock') continue;
+    if (s.kind !== 'yard' && s.kind !== 'wharf') continue;
     const steps = Math.max(1, Math.round(s.len / 8));
     for (let k = 0; k < steps; k++) {
       const t = (k + 0.5) / steps;
       const d = s.w0 + (s.w1 - s.w0) * t - 0.7;
       const a = at(s.i, d), b = at(s.j, d);
       const x = a.x + (b.x - a.x) * t, z = a.z + (b.z - a.z) * t;
-      if (nearPier(x, z)) continue;
+      if (nearPier(x, z) || craneLegs.some((l) => Math.hypot(l.x - x, l.z - z) < 2.5)) continue;
       bollards.push([x, z]);
       colliders.push({ minX: x - 0.25, maxX: x + 0.25, minZ: z - 0.25, maxZ: z + 0.25 });
-    }
-    if (pierRoots.some((r) => [s.i, s.prev.i, s.next.i].includes(r.seg)) || !rng.chance(0.6)) continue;
-    // One row (sometimes two) of containers, long side along the quay, leaving a lane by the edge.
-    const rowsHere = rng.chance(0.35) ? [PROMENADE + 2.6, PROMENADE + 5.3] : [PROMENADE + 2.6];
-    const t = rng.range(0.3, 0.7);
-    for (const d of rowsHere) {
-      if (d + 1.6 > Math.min(s.w0, s.w1) - 3) continue;
-      const a = at(s.i, d), b = at(s.j, d);
-      const cx = a.x + (b.x - a.x) * t, cz = a.z + (b.z - a.z) * t;
-      const height = rng.int(1, 3);
-      const yaw = Math.atan2(-s.dz, s.dx);
-      for (let h = 0; h < height; h++) containers.push({ x: cx, z: cz, y: y + h * 2.6, yaw: yaw + rng.range(-0.03, 0.03), color: rng.pick(CONTAINER_COLORS) });
-      colliders.push(boxCollider(cx, cz, s.dx, s.dz, 3.05, 1.25));
     }
   }
   if (bollards.length) {
@@ -232,7 +256,201 @@ export function createShore(rng, shore, slabs, colliders) {
   const paintMesh = new THREE.Mesh(paint.build(), toon({ vertexColors: true }));
   paintMesh.receiveShadow = true;
   group.add(sandMesh, woodMesh, paintMesh);
-  return { group, lamps };
+  return { group, lamps, stacks };
+}
+
+/**
+ * The shipyard along the `yard` stretches of dock: rows of container stacks back from the quay,
+ * ship-to-shore gantry cranes straddling the lane along the quay edge with their booms out over
+ * the water, and the cargo ships berthed alongside. Steelwork goes into `steel`; containers into
+ * `containers` (and their footprints into `stacks`). Returns the crane legs' positions.
+ */
+function shipyard(rng, shore, steel, colliders, containers, stacks) {
+  const { segs, at } = shore;
+  const y = SHORE_Y.curb;
+  const LANE = 13; // clear lane along the quay edge, under the cranes
+  const legs = [];
+
+  // Runs of shipyard, in order round the coast.
+  const runs = [];
+  for (const s of segs) {
+    if (!s.yard) continue;
+    if (runs.length && runs.at(-1).at(-1) === s.prev) runs.at(-1).push(s);
+    else runs.push([s]);
+  }
+  if (runs.length > 1 && runs[0][0].prev === runs.at(-1).at(-1)) runs[0].unshift(...runs.pop());
+
+  // Container yard: rows of stacks following the coast, with a cross aisle every so often.
+  const ROWS = [PROMENADE + 3.4, PROMENADE + 6.0, PROMENADE + 11.2, PROMENADE + 13.8];
+  for (const run of runs) {
+    for (const d of ROWS) {
+      // The row as a polyline, split wherever the yard is too narrow for it.
+      let line = [];
+      const lines = [line];
+      for (const s of run) {
+        if (Math.min(s.w0, s.w1) < d + 1.3 + LANE) {
+          if (line.length) lines.push((line = []));
+          continue;
+        }
+        if (!line.length) line.push(at(s.i, d));
+        line.push(at(s.j, d));
+      }
+      for (const pts of lines) {
+        if (pts.length < 2) continue;
+        const lens = pts.slice(1).map((p, k) => Math.hypot(p.x - pts[k].x, p.z - pts[k].z));
+        const total = lens.reduce((a, b) => a + b, 0);
+        let slot = 0;
+        for (let u = 5; u + 5 < total; u += 6.5, slot++) {
+          if (slot % 7 === 6 || rng.chance(0.12)) continue; // aisles and the odd empty slot
+          let k = 0, along = u;
+          while (k < lens.length - 1 && along > lens[k]) along -= lens[k++];
+          const a = pts[k], b = pts[k + 1];
+          const ux = (b.x - a.x) / lens[k], uz = (b.z - a.z) / lens[k];
+          const cx = a.x + ux * along, cz = a.z + uz * along;
+          const height = rng.int(1, 4);
+          const yaw = Math.atan2(-uz, ux);
+          const color = rng.pick(CONTAINER_COLORS);
+          for (let h = 0; h < height; h++) containers.push({ x: cx, z: cz, y: y + h * 2.6, yaw, color: h ? rng.pick(CONTAINER_COLORS) : color });
+          const box = boxCollider(cx, cz, ux, uz, 3.05, 1.25);
+          colliders.push(box);
+          stacks.push({ ...box, height: height * 2.6, color });
+        }
+      }
+    }
+  }
+
+  // Gantry cranes, every 45 m or so along the quay where it's deep enough.
+  for (const run of runs) {
+    let since = 20;
+    for (const s of run) {
+      since += s.len;
+      if (since < 45 || Math.min(s.w0, s.w1) < 28 || !s.prev.yard || !s.next.yard) continue;
+      since = 0;
+      const w = (s.w0 + s.w1) / 2;
+      const base = { x: (s.a.x + s.b.x) / 2, z: (s.a.z + s.b.z) / 2 };
+      const o = { x: base.x + s.nx * (w - 6.5), z: base.z + s.nz * (w - 6.5) };
+      crane(steel, o, s.dx, s.dz, s.nx, s.nz, y, rng.pick([0xd25a2a, 0x2f6fb0, 0xe0a526]), colliders, legs);
+    }
+  }
+
+  // Ships tied up alongside.
+  for (const ship of shore.ships) cargoShip(rng, steel, ship, containers, colliders);
+  return legs;
+}
+
+/**
+ * Builds a box standing on the ground, in a frame turned to (ux, uz) along / (vx, vz) across:
+ * u0..u1 along, v0..v1 across, y0..y1 up, about origin o.
+ */
+function frameBox(qb, o, ux, uz, vx, vz, u0, u1, v0, v1, y0, y1, color) {
+  const pt = (u, v) => ({ x: o.x + ux * u + vx * v, z: o.z + uz * u + vz * v });
+  let poly = [pt(u0, v0), pt(u1, v0), pt(u1, v1), pt(u0, v1)];
+  if (signedArea(poly) < 0) poly = poly.reverse();
+  qb.polyTop(poly, y1, color);
+  for (let i = 0; i < 4; i++) {
+    const a = poly[i], b = poly[(i + 1) % 4];
+    qb.wall(b.x, b.z, a.x, a.z, y0, y1, color);
+  }
+  return poly;
+}
+
+/** A ship-to-shore gantry crane centred on o: legs either side of the quay lane, boom out to sea. */
+function crane(qb, o, ux, uz, vx, vz, y, colour, colliders, legs) {
+  const c = new THREE.Color(colour);
+  const dark = c.clone().multiplyScalar(0.75);
+  const white = new THREE.Color(0xe9e4da);
+  const box = (u0, u1, v0, v1, y0, y1, col = c) => frameBox(qb, o, ux, uz, vx, vz, u0, u1, v0, v1, y + y0, y + y1, col);
+  for (const u of [-6, 6]) {
+    for (const v of [-5.2, 5.2]) {
+      box(u - 0.6, u + 0.6, v - 0.6, v + 0.6, 0, 19);
+      const p = { x: o.x + ux * u + vx * v, z: o.z + uz * u + vz * v };
+      legs.push(p);
+      colliders.push(boxCollider(p.x, p.z, ux, uz, 0.7, 0.7));
+    }
+    box(u - 0.5, u + 0.5, -5.8, 5.8, 17.5, 19.2, dark); // cross beam over the lane
+    box(u - 0.4, u + 0.4, -5.2, 5.2, 7, 7.8, dark); // lower brace
+  }
+  for (const v of [-5.2, 5.2]) box(-6.6, 6.6, v - 0.5, v + 0.5, 18, 19.5); // portal beams along the quay
+  // The boom: back over the yard and far out over the water.
+  box(-1.8, 1.8, -17, 36, 20.5, 22.2);
+  box(-3.2, 3.2, -15, -6.5, 22.2, 25.8, white); // machinery house
+  box(-3.2, 3.2, 4, 7.5, 18.4, 20.4, white); // operator's cab under the boom
+  // A-frame tower over the legs, with stays down to the boom.
+  for (const u of [-1.4, 1.4]) {
+    box(u - 0.35, u + 0.35, -2.5, -1.5, 22.2, 33);
+    box(u - 0.2, u + 0.2, -1.5, 30, 31.5, 32.1, dark); // forward stay (drawn level, reads as a cable from above)
+  }
+  box(-1.8, 1.8, -2.6, -1.4, 32.5, 33.5, dark);
+}
+
+/** A cargo ship berthed alongside the quay, with containers stacked on deck. */
+function cargoShip(rng, qb, ship, containers, colliders) {
+  const DECK = 3.2;
+  const hull = new THREE.Color(rng.pick([0x1d2a3a, 0x24412f, 0x2a2a2e, 0x3a2626]));
+  const red = new THREE.Color(0x9a2f25);
+  const deck = new THREE.Color(0x6a7068);
+  const white = new THREE.Color(0xf0ede4);
+  const poly = ship.poly;
+  const band = (y0, y1, col) => {
+    for (let i = 0; i < poly.length; i++) {
+      const a = poly[i], b = poly[(i + 1) % poly.length];
+      qb.wall(b.x, b.z, a.x, a.z, y0, y1, col);
+    }
+  };
+  band(WATER_LEVEL - 1.5, WATER_LEVEL + 0.5, red);
+  band(WATER_LEVEL + 0.5, DECK, hull);
+  qb.polyTop(poly, DECK, deck);
+  const xs = poly.map((p) => p.x), zs = poly.map((p) => p.z);
+  colliders.push({ minX: Math.min(...xs), maxX: Math.max(...xs), minZ: Math.min(...zs), maxZ: Math.max(...zs), poly });
+
+  const o = { x: ship.x, z: ship.z };
+  const hl = ship.length / 2, hb = ship.beam / 2;
+  const box = (u0, u1, v0, v1, y0, y1, col) => frameBox(qb, o, ship.ux, ship.uz, ship.vx, ship.vz, u0, u1, v0, v1, y0, y1, col);
+  // Accommodation block and bridge at the stern, then the funnel.
+  box(-hl + 2, -hl + 10, -hb + 1, hb - 1, DECK, DECK + 9, white);
+  box(-hl + 1.8, -hl + 10.2, -hb + 0.6, hb - 0.6, DECK + 7.2, DECK + 8.2, new THREE.Color(0x26354d)); // bridge windows
+  box(-hl + 3, -hl + 6, -1.4, 1.4, DECK + 9, DECK + 13, new THREE.Color(rng.pick([0xf2c230, 0xd8473a, 0x2f8fd8])));
+  // Containers on deck, end to end along the ship, four across.
+  const yaw = Math.atan2(-ship.uz, ship.ux);
+  for (let u = -hl + 14; u + 3.2 < hl - 10; u += 6.4) {
+    const height = rng.int(1, 3);
+    for (const v of [-3.66, -1.22, 1.22, 3.66]) {
+      const n = Math.max(1, height + rng.int(-1, 0));
+      for (let h = 0; h < n; h++) {
+        containers.push({
+          x: o.x + ship.ux * u + ship.vx * v,
+          z: o.z + ship.uz * u + ship.vz * v,
+          y: DECK + h * 2.6,
+          yaw,
+          color: rng.pick(CONTAINER_COLORS),
+        });
+      }
+    }
+  }
+}
+
+/**
+ * A concrete crash barrier from a to b along the top of the seawall: a low wall with a sloped
+ * face each side, standing on y. (nx, nz) points out to sea.
+ */
+function barrier(qb, a, b, y, nx, nz) {
+  const H = 0.9, base = 0.32, crown = 0.12;
+  const at = (p, off) => ({ x: p.x + nx * off, z: p.z + nz * off });
+  const [a0, b0, a1, b1] = [at(a, -base), at(b, -base), at(a, base), at(b, base)];
+  const [ta0, tb0, ta1, tb1] = [at(a, -crown), at(b, -crown), at(a, crown), at(b, crown)];
+  // Land side, sea side (sloping), then the top.
+  const side = (p, q, tp, tq, sx, sz) => {
+    let pts = [[p.x, y, p.z], [q.x, y, q.z], [tq.x, y + H, tq.z], [tp.x, y + H, tp.z]];
+    const ex = q.x - p.x, ez = q.z - p.z;
+    if (-ez * sx + ex * sz < 0) pts = [pts[1], pts[0], pts[3], pts[2]];
+    const len = Math.hypot(ex, ez) / qb.tile;
+    qb.face(pts, [sx, 0.3, sz], [[0, 0], [len, 0], [len, H / qb.tile], [0, H / qb.tile]], BARRIER);
+  };
+  side(a0, b0, ta0, tb0, -nx, -nz);
+  side(a1, b1, ta1, tb1, nx, nz);
+  const lid = [ta0, tb0, tb1, ta1];
+  if (signedArea(lid) > 0) lid.reverse(); // `flat` wants it clockwise
+  flat(qb, lid.map((p) => [p.x, y + H, p.z]), BARRIER);
 }
 
 /** Flat face through points given geom-CW (as seen from above: front-facing for three.js). */

@@ -461,7 +461,7 @@ function generate(seed) {
   g.finalize();
 
   const blocks = traceBlocks(g);
-  const shore = buildShore(outerCurb(g), rng, (x, z) => (dockAt(x, z) ? 'dock' : 'beach'));
+  const shore = buildShore(outerCurb(g), rng, shoreKindAt);
   const { minX, minZ, maxX, maxZ } = shore.bounds;
   const half = Math.ceil(Math.max(-minX, -minZ, maxX, maxZ)) + 4;
   // Typical distance from the middle of town to the coast road: what "downtown" is measured against.
@@ -522,16 +522,22 @@ function islandDistance(s, x, z) {
 
 const angleGap = (a, b) => Math.abs(Math.atan2(Math.sin(a - b), Math.cos(a - b)));
 
-// The docks: two stretches of working waterfront, one round the bay on the east coast and one
-// on the north-west. The rest of the coast is beach.
-export const DOCK_ARCS = [
-  { a: -0.25, span: 0.55, name: 'Dockside Freight' },
-  { a: -2.35, span: 0.38, name: 'Northgate Storage' },
+// What each side of the island's coast is. Angles are round the middle of town (atan2(z, x):
+// 0 is east, π/2 south, ±π west, -π/2 north). The whole east side, round the harbour bay, is a
+// shipyard (a deep quay with a container yard, gantry cranes and cargo ships alongside); the south
+// end is beach; the west is a wooden waterfront with piers sticking out; and in the north the
+// promenade just ends in a seawall with a barrier along it. Named sectors get a warehouse.
+export const SHORE_SECTORS = [
+  { from: -1.07, to: 1.03, kind: 'yard', name: 'Dockside Freight' },
+  { from: 1.03, to: 2.3, kind: 'beach' },
+  { from: 2.3, to: 4.08, kind: 'wharf', name: 'Pier Street Storage' }, // wraps past ±π
+  { from: -2.2, to: -1.07, kind: 'seawall' },
 ];
-function dockAt(x, z) {
-  const a = Math.atan2(z, x);
-  return DOCK_ARCS.some((d) => angleGap(a, d.a) < d.span);
-}
+const sectorAt = (a) => SHORE_SECTORS.find((s) => {
+  const t = ((a - s.from) % (Math.PI * 2) + Math.PI * 2) % (Math.PI * 2);
+  return t < s.to - s.from;
+}) ?? SHORE_SECTORS[0];
+const shoreKindAt = (x, z) => sectorAt(Math.atan2(z, x)).kind;
 
 /** The outer curb of the whole road network: the curb line along the sea side of the coast road. */
 function outerCurb(g) {
@@ -775,9 +781,10 @@ function assignUses(layout, rng) {
     ['police', -0.3 * half, 0.15 * half],
     ['hospital', 0.3 * half, -0.35 * half],
     ['gunshop', sc.x, sc.z],
-    ...DOCK_ARCS.map((d) => {
-      // A block back from the middle of the docks.
-      const p = layout.shore.curb.reduce((a, c) => (angleGap(Math.atan2(c.z, c.x), d.a) < angleGap(Math.atan2(a.z, a.x), d.a) ? c : a));
+    ...SHORE_SECTORS.filter((d) => d.name).map((d) => {
+      // A block back from the middle of the waterfront.
+      const mid = (d.from + d.to) / 2;
+      const p = layout.shore.curb.reduce((a, c) => (angleGap(Math.atan2(c.z, c.x), mid) < angleGap(Math.atan2(a.z, a.x), mid) ? c : a));
       const k = 1 - 45 / Math.hypot(p.x, p.z);
       return ['warehouse', p.x * k, p.z * k, d.name];
     }),

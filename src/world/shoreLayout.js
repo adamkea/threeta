@@ -14,14 +14,19 @@ export const SHORE_Y = { curb: 0.25, sandTop: 0.05, pier: 0.4 };
 export const WATER_LEVEL = -0.6;
 const UNDERWATER = 6; // how far the sand carries on under the water
 const BEACH_W = [22, 34]; // curb to waterline, beaches
-const DOCK_W = 15; // curb to quay edge, docks
+const WHARF_W = 12; // curb to the edge of the wooden wharf
+const SEAWALL_W = PROMENADE + 0.9; // the seawall: the promenade and the barrier along its top
+const YARD_W = 32; // curb to quay edge in the shipyard: room for a container yard and the crane lane
 const STEP = 12; // length of the pieces the shore is built from
 
 /**
  * @param {{x:number,z:number}[]} curbIn outer curb of the road network (any orientation)
- * @param {(x:number,z:number)=>'beach'|'dock'} typeAt which kind of shore a stretch of coast is
+ * @param {(x:number,z:number)=>'beach'|'yard'|'wharf'|'seawall'} kindAt which kind of shore a
+ *   stretch of coast is. Everything but beach is built as a "dock" (flat, ending in an edge with
+ *   water straight below it): the shipyard's deep concrete quay, the west's wooden wharf, or the
+ *   north's seawall, just the promenade with a barrier along the top.
  */
-export function buildShore(curbIn, rng, typeAt) {
+export function buildShore(curbIn, rng, kindAt) {
   let curb = simplify(curbIn, 0.05);
   if (signedArea(curb) < 0) curb = curb.slice().reverse();
   // Merge very short edges (they come from tight junction corners) into their neighbours.
@@ -48,19 +53,36 @@ export function buildShore(curbIn, rng, typeAt) {
     const dx = (b.x - a.x) / len, dz = (b.z - a.z) / len;
     return { a, b, len, dx, dz, nx: dz, nz: -dx, edge: a.edge };
   });
+  // Which way each vertex pushes out. A plain mitre would put all of a corner's turn on one
+  // vertex, and rows 30 m out would fold over; instead the outward direction is averaged over the
+  // coast either side, so corners round off over a few pieces. Scaled so that on a straight run
+  // `d` is exactly the distance out from the curb.
+  const SMOOTH = 36;
   const mitre = curb.map((p, i) => {
+    let ux = 0, uz = 0;
+    for (const dir of [1, -1]) {
+      let along = 0;
+      for (let k = 0; along < SMOOTH && k < n; k++) {
+        const e = edges[(dir > 0 ? i + k : i - 1 - k + n * 2) % n];
+        const wgt = (1 - along / SMOOTH) * Math.min(e.len, SMOOTH - along);
+        ux += e.nx * wgt;
+        uz += e.nz * wgt;
+        along += e.len;
+      }
+    }
+    const l = Math.hypot(ux, uz) || 1;
+    ux /= l;
+    uz /= l;
     const e0 = edges[(i + n - 1) % n], e1 = edges[i];
-    const k = 1 + e0.nx * e1.nx + e0.nz * e1.nz;
-    let mx = (e0.nx + e1.nx) / Math.max(k, 0.2), mz = (e0.nz + e1.nz) / Math.max(k, 0.2);
-    const l = Math.hypot(mx, mz);
-    if (l > 2.5) (mx *= 2.5 / l), (mz *= 2.5 / l);
-    return { x: mx, z: mz };
+    const cos = Math.max(0.4, (ux * (e0.nx + e1.nx) + uz * (e0.nz + e1.nz)) / 2);
+    return { x: ux / cos, z: uz / cos };
   });
 
   // What each stretch is, and how wide: beach widths wander gently along the coast.
   const segs = edges.map((e, i) => {
     const mx = (e.a.x + e.b.x) / 2 + e.nx * 10, mz = (e.a.z + e.b.z) / 2 + e.nz * 10;
-    return { i, ...e, type: typeAt(mx, mz) };
+    const kind = kindAt(mx, mz);
+    return { i, ...e, kind, type: kind === 'beach' ? 'beach' : 'dock', yard: kind === 'yard' };
   });
   const ph = Array.from({ length: 3 }, () => rng.range(0, Math.PI * 2));
   let run = 0;
@@ -69,24 +91,43 @@ export function buildShore(curbIn, rng, typeAt) {
     const wave = 0.45 * Math.sin(run / 70 + ph[0]) + 0.35 * Math.sin(run / 29 + ph[1]) + 0.2 * Math.sin(run / 13 + ph[2]);
     return BEACH_W[0] + (BEACH_W[1] - BEACH_W[0]) * (0.5 + 0.5 * wave);
   });
-  for (const s of segs) {
-    const j = (s.i + 1) % n;
-    s.w0 = s.type === 'dock' ? DOCK_W : beachW[s.i];
-    s.w1 = s.type === 'dock' ? DOCK_W : beachW[j];
-  }
-  // In a bay the mitres close in on each other: narrow the shore where its rows would cross.
-  for (let pass = 0; pass < 20; pass++) {
+  // Widths are kept per vertex for each kind of shore, so neighbouring pieces of the same kind
+  // meet without a step.
+  const kindOf = (s) => s.kind;
+  const W = {
+    beach: beachW,
+    wharf: curb.map(() => WHARF_W),
+    yard: curb.map(() => YARD_W),
+    seawall: curb.map(() => SEAWALL_W),
+  };
+  // In a bay the rows still close in on each other: narrow the shore there, and taper the
+  // narrowing gently along the coast so it doesn't leave notches.
+  for (let pass = 0; pass < 40; pass++) {
     let ok = true;
     for (const s of segs) {
-      const m0 = mitre[s.i], m1 = mitre[(s.i + 1) % n];
-      const far = (w0, w1) => s.len + (m1.x * w1 - m0.x * w0) * s.dx + (m1.z * w1 - m0.z * w0) * s.dz;
-      if (far(s.w0 + UNDERWATER, s.w1 + UNDERWATER) < 4) {
-        s.w0 = Math.max(PROMENADE + 4, s.w0 * 0.85);
-        s.w1 = Math.max(PROMENADE + 4, s.w1 * 0.85);
+      const w = W[kindOf(s)], j = (s.i + 1) % n;
+      const m0 = mitre[s.i], m1 = mitre[j];
+      const far = s.len + (m1.x * (w[j] + UNDERWATER) - m0.x * (w[s.i] + UNDERWATER)) * s.dx + (m1.z * (w[j] + UNDERWATER) - m0.z * (w[s.i] + UNDERWATER)) * s.dz;
+      if (far < 4) {
+        w[s.i] = Math.max(PROMENADE + 4, w[s.i] * 0.92);
+        w[j] = Math.max(PROMENADE + 4, w[j] * 0.92);
         ok = false;
       }
     }
+    for (const w of Object.values(W)) {
+      for (let k = 0; k < 2 * n; k++) {
+        const i = k % n, prev = (i + n - 1) % n;
+        w[i] = Math.min(w[i], w[prev] + edges[prev].len * 0.35);
+        const r = n - 1 - i, next = (r + 1) % n;
+        w[r] = Math.min(w[r], w[next] + edges[r].len * 0.35);
+      }
+    }
     if (ok) break;
+  }
+  for (const s of segs) {
+    const w = W[kindOf(s)];
+    s.w0 = w[s.i];
+    s.w1 = w[(s.i + 1) % n];
   }
 
   const at = (i, d) => ({ x: curb[i].x + mitre[i].x * d, z: curb[i].z + mitre[i].z * d });
@@ -128,22 +169,22 @@ export function buildShore(curbIn, rng, typeAt) {
     if (signedArea(poly) < 0) poly.reverse();
     piers.push({ kind, poly, x0: p0.x, z0: p0.z, ux: s.nx, uz: s.nz, vx: s.dx, vz: s.dz, length, hw, seg: s.i });
   };
-  // Along each run of dock, a pier every 50 m or so (not too near either end of the run).
+  // Along the wharf, piers of all lengths every 35 m or so (not too near either end of it).
   const runs = [];
   for (const s of segs) {
-    if (s.type !== 'dock') continue;
-    if (s.prev.type === 'dock' && runs.length && runs.at(-1).at(-1) === s.prev) runs.at(-1).push(s);
+    if (s.kind !== 'wharf') continue;
+    if (runs.length && runs.at(-1).at(-1) === s.prev) runs.at(-1).push(s);
     else runs.push([s]);
   }
-  if (runs.length > 1 && segs[0].type === 'dock' && segs.at(-1).type === 'dock') runs[0].unshift(...runs.pop());
+  if (runs.length > 1 && runs[0][0].prev === runs.at(-1).at(-1)) runs[0].unshift(...runs.pop());
   for (const r of runs) {
+    const total = r.reduce((a, q) => a + q.len, 0);
     let along = 0;
-    let last = 0;
+    let last = -10;
     for (const s of r) {
       along += s.len;
-      const total = r.reduce((a, q) => a + q.len, 0);
-      if (along - last > 50 && along > 24 && total - along > 24) {
-        pier(s, s.w0 - 0.5, 24, 7, 'dock');
+      if (along - last > 35 && along > 18 && total - along > 18 && Math.abs(s.w0 - s.w1) < 0.5) {
+        pier(s, s.w0 - 0.5, rng.range(18, 44), rng.pick([6, 7, 9]), 'wharf');
         last = along;
       }
     }
@@ -159,8 +200,10 @@ export function buildShore(curbIn, rng, typeAt) {
   }
   if (best) pier(best.s, PROMENADE - 0.2, Math.max(best.s.w0, best.s.w1) + 46, 8, 'pleasure');
 
-  const bb = bounds([...coast, ...piers.flatMap((p) => p.poly), ...segs.flatMap((s) => s.quad)]);
-  const shore = { curb, segs, coast, piers, bounds: bb, mitre, at };
+  const ships = berthShips(segs, coast, at);
+
+  const bb = bounds([...coast, ...piers.flatMap((p) => p.poly), ...segs.flatMap((s) => s.quad), ...ships.flatMap((s) => s.poly)]);
+  const shore = { curb, segs, coast, piers, ships, bounds: bb, mitre, at };
 
   // Spatial hash of stretches and piers for the point lookups.
   const CELL = 24;
@@ -180,6 +223,42 @@ export function buildShore(curbIn, rng, typeAt) {
   for (const p of piers) insert(p.poly, p);
   shore.near = (x, z) => cells.get(key(Math.floor(x / CELL), Math.floor(z / CELL))) ?? [];
   return shore;
+}
+
+/**
+ * Cargo ships tied up along the shipyard quay: wherever the quay runs straight enough for a whole
+ * hull to lie alongside it, clear of the shore and of each other.
+ * Each ship: { x, z, ux, uz (bow direction), length, beam, poly (CCW hull outline, bow pointed) }.
+ */
+function berthShips(segs, coast, at) {
+  const ships = [];
+  const LENGTH = 60, BEAM = 12, GAP = 1.2;
+  for (const s of segs) {
+    if (!s.yard || !s.prev.yard || !s.next.yard) continue;
+    const mid = at(s.i, 0), mid1 = at(s.j, 0);
+    const w = (s.w0 + s.w1) / 2;
+    const cx0 = (mid.x + mid1.x) / 2, cz0 = (mid.z + mid1.z) / 2;
+    const off = w + GAP + BEAM / 2;
+    const x = cx0 + s.nx * off, z = cz0 + s.nz * off;
+    if (ships.some((o) => Math.hypot(o.x - x, o.z - z) < LENGTH + 10)) continue;
+    // The quay must run along the whole near side of the hull, and the hull must be in open water.
+    let ok = true;
+    for (let k = -1; k <= 1 && ok; k += 0.1) {
+      const ax = x + s.dx * k * LENGTH * 0.5, az = z + s.dz * k * LENGTH * 0.5;
+      const near = BEAM / 2 + GAP;
+      for (const v of [-near + 0.3, 0, near]) {
+        if (inPolygon(coast, ax - s.nx * v, az - s.nz * v)) ok = false;
+      }
+      if (!inPolygon(coast, ax - s.nx * (near + 3.5), az - s.nz * (near + 3.5))) ok = false;
+    }
+    if (!ok) continue;
+    const hl = LENGTH / 2, hb = BEAM / 2;
+    const pt = (u, v) => ({ x: x + s.dx * u + s.nx * v, z: z + s.dz * u + s.nz * v });
+    let poly = [pt(-hl, -hb), pt(hl - 10, -hb), pt(hl, 0), pt(hl - 10, hb), pt(-hl, hb)];
+    if (signedArea(poly) < 0) poly = poly.reverse();
+    ships.push({ x, z, ux: s.dx, uz: s.dz, vx: s.nx, vz: s.nz, length: LENGTH, beam: BEAM, poly });
+  }
+  return ships;
 }
 
 /** Is (x, z) inside a convex CCW polygon? */
@@ -208,12 +287,22 @@ export function inPolygon(poly, x, z) {
 function locate(shore, x, z) {
   for (const s of shore.near(x, z)) {
     if (!s.hit || !inConvex(s.hit, x, z)) continue;
-    const d = (x - s.a.x) * s.nx + (z - s.a.z) * s.nz;
-    // How far along: measured along the row at this distance out.
-    const r0x = s.a.x + s.mitre0.x * d, r0z = s.a.z + s.mitre0.z * d;
-    const r1x = s.b.x + s.mitre1.x * d, r1z = s.b.z + s.mitre1.z * d;
-    const rl = (r1x - r0x) * s.dx + (r1z - r0z) * s.dz;
-    const t = Math.max(0, Math.min(1, ((x - r0x) * s.dx + (z - r0z) * s.dz) / (rl || 1)));
+    // Solve a + t (b - a) + d (m0 + t (m1 - m0)) = p for (t, d): the piece is a bilinear patch
+    // between the curb and the rows further out. A few Newton steps from the straight-run guess.
+    const m0 = s.mitre0, m1 = s.mitre1;
+    let d = (x - s.a.x) * s.nx + (z - s.a.z) * s.nz;
+    let t = ((x - s.a.x) * s.dx + (z - s.a.z) * s.dz) / s.len;
+    for (let k = 0; k < 6; k++) {
+      const mx = m0.x + t * (m1.x - m0.x), mz = m0.z + t * (m1.z - m0.z);
+      const fx = s.a.x + t * (s.b.x - s.a.x) + d * mx - x;
+      const fz = s.a.z + t * (s.b.z - s.a.z) + d * mz - z;
+      const tx = s.b.x - s.a.x + d * (m1.x - m0.x), tz = s.b.z - s.a.z + d * (m1.z - m0.z);
+      const det = tx * mz - tz * mx;
+      if (Math.abs(det) < 1e-9) break;
+      t -= (fx * mz - fz * mx) / det;
+      d -= (tx * fz - tz * fx) / det;
+    }
+    t = Math.max(0, Math.min(1, t));
     return { seg: s, d, t, w: s.w0 + (s.w1 - s.w0) * t };
   }
   return null;

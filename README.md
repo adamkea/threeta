@@ -153,11 +153,21 @@ draws from that graph.
 
 Outside the coast road is the **shore** (`src/world/shoreLayout.js` for the layout, `Shore.js` for the
 meshes). A paved promenade with street lamps runs right round the island along the curb. Beyond it,
-each stretch of coast is either a **beach** (sand sloping down into shallow turquoise water with surf,
-palm trees, parasols and lifeguard towers) or a **dock** (concrete out to a quay wall, with bollards
-and stacked shipping containers). Wooden **piers** stick out from the docks, and a long railed pleasure
-pier runs out from the beach. You can walk and drive on all of it, and over the edge into the sea.
-`DOCK_ARCS` in `CityLayout.js` says which stretches of coast are docks; the warehouses sit behind them.
+each side of the island is different:
+
+- **East: the shipyard.** A deep concrete quay all round the harbour bay: rows of container stacks,
+  ship-to-shore gantry cranes straddling the lane along the quay edge with their booms out over the
+  water, and cargo ships (loaded with containers) tied up wherever the quay runs straight enough.
+  The Dockside Freight warehouse sits behind it.
+- **South: beach.** Sand sloping down into shallow turquoise water with surf, palm trees, parasols,
+  lifeguard towers, and a long railed pleasure pier.
+- **West: the wharf.** A timber boardwalk on piles with wooden piers of all lengths sticking out into
+  the sea, and the Pier Street Storage warehouse behind it.
+- **North: the seawall.** The promenade just ends in a wall down to the water, with a concrete crash
+  barrier along the top so you can't drive off.
+
+You can walk and drive on all of it, and off the edges (barrier aside) into the sea.
+`SHORE_SECTORS` in `CityLayout.js` says which stretch of coast is which.
 
 To change the layout, edit `generate()` in `CityLayout.js`: block sizes, warp strength, which lines are
 avenues, the diagonals' paths, which streets close. Junction geometry (how far each junction box reaches, crosswalks,

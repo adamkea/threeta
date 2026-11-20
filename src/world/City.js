@@ -62,6 +62,7 @@ export function createCity(seed = 1337) {
 
   const shore = createShore(createRng(seed + 31), LAYOUT.shore, slabs, colliders);
   group.add(shore.group);
+  buildings.push(...shore.stacks); // container stacks show on the map
 
   const sidewalkMat = toon({ map: createTileTexture(), vertexColors: true });
   const parking = createParkingLots(createRng(seed + 7), slabs, colliders);
