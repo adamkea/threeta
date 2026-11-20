@@ -3,11 +3,19 @@ import { SMAAPass } from 'three/examples/jsm/postprocessing/SMAAPass.js';
 import { GLOW_LAYER } from '../effects/SirenGlow.js';
 
 /**
+ * People live on their own layer so the normal pass can tag them (alpha 0 in the normal buffer).
+ * Where two parts of the same person meet, there's no ink unless one really passes in front of
+ * the other — otherwise every neck, elbow and knee gets outlined and they look snapped together.
+ */
+export const CHAR_LAYER = 2;
+
+/**
  * Two-pass "comic ink" renderer.
  *  1. Colour pass  — the normal scene, into an MSAA target.
  *  2. Normal pass  — the scene with view-space normals + a depth texture.
  *  3. Composite    — draws thick black lines wherever depth jumps (silhouettes) or the
  *                    surface normal turns sharply (creases), and gives colours a little punch.
+ *                    Creases inside one person only count where there's a real depth step.
  *  4. SMAA         — smooths the jagged ink lines (they come from non-MSAA buffers, and the
  *                    final full-screen quad gets no hardware antialiasing).
  */
@@ -23,6 +31,12 @@ export class InkRenderer {
       depthTexture: new THREE.DepthTexture(1, 1),
     });
     this.normalMaterial = new THREE.MeshNormalMaterial();
+    // Same, but writes alpha 0 to mark "part of a person".
+    this.charNormalMaterial = new THREE.MeshNormalMaterial();
+    this.charNormalMaterial.onBeforeCompile = (shader) => {
+      shader.fragmentShader = shader.fragmentShader.replace('#ifdef OPAQUE', 'gl_FragColor.a = 0.0;\n#if 0');
+    };
+    this.charNormalMaterial.customProgramCacheKey = () => 'ink-char-normal';
     // Composite lands here (already sRGB-encoded) so SMAA can smooth it on the way to the screen.
     this.inkTarget = new THREE.WebGLRenderTarget(1, 1, { depthBuffer: false });
 
@@ -67,6 +81,7 @@ export class InkRenderer {
 
           float d = viewDepth(vUv);
           vec3 n = normalAt(vUv);
+          float isChar = 1.0 - texture2D(tNormal, vUv).a;
           float edge = 0.0;
           vec2 o = texel * thickness;
           vec2 offs[8];
@@ -80,7 +95,11 @@ export class InkRenderer {
             edge = max(edge, smoothstep(0.012, 0.03, jump));
             // Creases: normals that disagree strongly.
             float nd = dot(n, normalAt(uv));
-            edge = max(edge, smoothstep(0.75, 0.45, nd) * step(d, dn + d * 0.01));
+            float crease = smoothstep(0.75, 0.45, nd) * step(d, dn + d * 0.01);
+            // Both pixels on a person: only where one part sits in front of another (metres).
+            float samePerson = isChar * (1.0 - texture2D(tNormal, uv).a);
+            crease *= mix(1.0, smoothstep(0.02, 0.06, dn - d), samePerson);
+            edge = max(edge, crease);
           }
           col = mix(col, inkColor, edge);
           gl_FragColor = vec4(clamp(col, 0.0, 1.0), 1.0);
@@ -120,7 +139,9 @@ export class InkRenderer {
     u.near.value = camera.near;
     u.far.value = camera.far;
 
+    const layerMask = camera.layers.mask;
     camera.layers.enable(GLOW_LAYER);
+    camera.layers.enable(CHAR_LAYER);
     r.setRenderTarget(this.colorTarget);
     r.render(scene, camera);
 
@@ -134,8 +155,16 @@ export class InkRenderer {
     r.setClearColor(0x8080ff, 1);
     r.clear();
     camera.layers.disable(GLOW_LAYER); // glows get no ink outlines
+    camera.layers.disable(CHAR_LAYER);
     r.render(scene, camera);
-    camera.layers.enable(GLOW_LAYER);
+    // People on top, tagged, into the same depth buffer.
+    const autoClear = r.autoClear;
+    r.autoClear = false;
+    camera.layers.set(CHAR_LAYER);
+    scene.overrideMaterial = this.charNormalMaterial;
+    r.render(scene, camera);
+    r.autoClear = autoClear;
+    camera.layers.mask = layerMask;
     scene.overrideMaterial = null;
     scene.background = bg;
     r.shadowMap.autoUpdate = autoShadow;

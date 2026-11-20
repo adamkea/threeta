@@ -21,10 +21,35 @@ import { CITY } from '../world/City.js';
  *   belt       belt colour
  *   stripes    tracksuit stripe colour down the legs (and sleeves)
  *   scale      body size multiplier
+ *   hairStyle  'short'|'long'|'ponytail'|'bun'|'afro'|'bald'
+ *   body       { heavy, broad, curvy }: build, roughly -1..1 / 0..1 (see bodyShapes.js)
+ *   face       { jaw, long, size }: face shape (-1..1) and head size (~1)
  */
 
 const SKINS = [0xf1d0b5, 0xe0b48f, 0xc68e64, 0x8d5a3b, 0x5c3a24];
 const HAIR = [0x2a1c14, 0x111111, 0x6b4a2f, 0xc9a35b, 0x8a8a8a, 0x9b3b1e];
+
+/**
+ * A random build and face. `frame` -1..1 runs from curvy (narrow shoulders, wide hips) to broad
+ * (V-shaped); `heavy` from skinny to heavyset. Options skew the ranges for a role.
+ */
+function physique(rng, { heavy = [-0.6, 1], frame = [-1, 1] } = {}) {
+  const f = rng.range(frame[0], frame[1]);
+  // Most people are near average; a few are properly heavy or skinny.
+  const h = (rng.range(heavy[0], heavy[1]) + rng.range(heavy[0], heavy[1])) / 2;
+  return {
+    body: { heavy: h, broad: Math.max(0, f), curvy: Math.max(0, -f) },
+    face: { jaw: rng.range(-0.8, 0.9) + 0.4 * f, long: rng.range(-0.8, 0.8), size: rng.range(0.95, 1.05) },
+  };
+}
+
+/** A hairstyle; long styles are likelier on curvier frames. */
+function hairStyle(rng, body) {
+  const longish = 0.15 + 0.6 * body.curvy;
+  const r = rng.next();
+  if (r < longish) return rng.pick(['long', 'long', 'ponytail', 'bun']);
+  return rng.pick(['short', 'short', 'short', 'afro', 'bald', 'ponytail', 'long']);
+}
 
 // Civilians stay in everyday, slightly muted colours so the uniforms and gang colours pop.
 const CIV_SHIRTS = [0x7fa7c9, 0xe8e2d0, 0xd9a066, 0x6c8f7d, 0xc98b8b, 0x9a9a9a, 0xd8c35a, 0x5b7a99, 0xe6b8c4, 0xf2f2f2];
@@ -53,7 +78,9 @@ export function civilianLook(rng) {
     skin: rng.pick(SKINS),
     hair: rng.pick(HAIR),
     scale: rng.range(0.9, 1.08),
+    ...physique(rng),
   };
+  look.hairStyle = hairStyle(rng, look.body);
   if (rng.chance(0.3)) {
     look.inner = look.shirt;
     look.shirt = look.sleeves = rng.pick(CIV_JACKETS);
@@ -81,12 +108,15 @@ export function copLook(rng) {
     belt: 0x0c0c0e,
     glasses: rng.chance(0.35),
     scale: rng.range(1.02, 1.1),
+    ...physique(rng, { heavy: [-0.3, 0.9], frame: [-0.6, 1] }),
+    hairStyle: rng.pick(['short', 'short', 'ponytail', 'bald']),
   };
 }
 
 export function gangLook(rng, gang) {
   const g = GANGS[gang];
-  const base = { skin: rng.pick(SKINS), hair: rng.pick(HAIR), scale: rng.range(0.98, 1.1) };
+  const base = { skin: rng.pick(SKINS), hair: rng.pick(HAIR), scale: rng.range(0.98, 1.1), ...physique(rng, { heavy: [-0.7, 0.7] }) };
+  base.hairStyle = hairStyle(rng, base.body);
   switch (gang) {
     case 'reds': // red do-rag, black jacket with red sleeves, bandana masks, gold chains
       return {

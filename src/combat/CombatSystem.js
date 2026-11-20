@@ -2,9 +2,9 @@ import * as THREE from 'three';
 import { isSmall, rayCollider } from '../world/colliders.js';
 
 const PED_HIT_RADIUS = 0.55; // people are drawn big, so they're a bit fatter to bullets than to cars
-const MUZZLE_FORWARD = 1.05; // where the muzzle sits relative to a person holding a gun out (m)
-const MUZZLE_SIDE = 0.38; // …to their right
-const MUZZLE_HEIGHT = 1.95;
+const MUZZLE_FORWARD = 1.12; // where the muzzle sits relative to a person holding a gun out (m)
+const MUZZLE_SIDE = 0.37; // …to their right
+const MUZZLE_HEIGHT = 2.04;
 
 const _dir = new THREE.Vector2();
 const _right = new THREE.Vector2();
