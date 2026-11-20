@@ -2,16 +2,10 @@ import * as THREE from 'three';
 import { toon } from '../render/toon.js';
 
 // The sea round the island: a toon-lit plane whose colour is worked out in the shader from the
-// distance to the quay. Shallow turquoise against the quay wall steps down through flat comic
-// bands to deep blue out at sea, with white foam slapping against the wall, swell lines rolling in
-// to the shore and wavy glints drifting across open water. The plane itself stays flat (the ink
-// pass reads normals from the geometry), so all the motion is in the fragment shader.
-
-const SHALLOW = new THREE.Color(0x5cbcca);
-const MID = new THREE.Color(0x3393bf);
-const DEEP = new THREE.Color(0x2a74a9);
-const FOAM = new THREE.Color(0xeaf6f9);
-const GLINT = new THREE.Color(0xb9ecf5);
+// distance to the quay. It deepens smoothly away from the island, soft ripple lines drift across
+// it, the water darkens where it meets the quay wall and a thin lip of foam laps against the wall.
+// The plane itself stays flat (the ink pass reads normals from the geometry), so all the motion
+// is in the fragment shader.
 
 /**
  * @param {number} half   half-size of the (square) island, in metres
@@ -23,11 +17,6 @@ export function createWater(half, y, extent) {
   const uniforms = {
     uTime: { value: 0 },
     uHalf: { value: half },
-    uShallow: { value: SHALLOW },
-    uMid: { value: MID },
-    uDeep: { value: DEEP },
-    uFoam: { value: FOAM },
-    uGlint: { value: GLINT },
   };
 
   const mat = toon({ color: 0xffffff });
@@ -58,7 +47,6 @@ export function createWater(half, y, extent) {
 const SEA_GLSL = /* glsl */ `
 varying vec2 vSeaPos;
 uniform float uTime, uHalf;
-uniform vec3 uShallow, uMid, uDeep, uFoam, uGlint;
 
 float seaHash(vec2 p) {
   p = fract(p * vec2(123.34, 456.21));
@@ -81,42 +69,18 @@ vec3 seaColour(vec2 p) {
   vec2 q = abs(p) - uHalf;
   float d = length(max(q, 0.0)) + min(max(q.x, q.y), 0.0);
   float along = q.x > q.y ? p.y : p.x;
-
-  // A slow wobble so the band edges and wave fronts look hand-drawn rather than ruled.
-  float wob = (seaFbm(p * 0.06 + vec2(t * 0.03, -t * 0.02)) - 0.5) * 6.0;
-  float dw = d + wob;
-
-  // Flat comic depth bands: shallow by the wall, mid, then deep. Hard steps, no gradient.
-  vec3 col = uDeep;
-  col = mix(col, uMid, step(dw, 34.0));
-  col = mix(col, uShallow, step(dw, 9.0));
-
-  // Out at sea: wavy glints drifting with the current, thinning out near the shore.
-  vec2 gp = p * vec2(0.11, 0.19) + vec2(t * 0.05, t * 0.08);
-  float g = seaFbm(gp + seaFbm(gp * 0.7 - t * 0.04) * 1.6);
-  float glint = 1.0 - smoothstep(0.012, 0.03, abs(g - 0.55));
-  glint *= step(0.45, seaNoise(p * 0.08 - t * 0.03)) * smoothstep(6.0, 16.0, d);
-  col = mix(col, mix(col, uGlint, 0.75), glint);
-
-  // Swell lines rolling in toward the quay, breaking up into dashes as they come.
-  float phase = (d + wob * 0.4) * 0.16 + t * 0.5;
-  // Each line thins to nothing at its ends rather than stopping square.
-  float dash = smoothstep(0.38, 0.58, seaNoise(vec2(along * 0.09, floor(phase) * 3.7)));
-  float edge = 0.5 - 0.06 * dash;
-  float swell = step(0.001, dash) * smoothstep(edge, edge + 0.02, abs(fract(phase) - 0.5));
-  swell *= smoothstep(30.0, 14.0, d) * smoothstep(1.5, 4.0, d);
-  col = mix(col, mix(col, uFoam, 0.7), swell);
-
-  // Foam against the quay wall: it surges out and drains back, ragged along its edge.
-  float surge = 0.5 + 0.5 * sin(t * 1.3 + along * 0.05);
-  float rag = seaFbm(vec2(along * 0.35, t * 0.4)) * 0.5;
-  float foam = step(d, 0.25 + surge * 0.55 + rag);
-  // A second, broken ring a little further out, chasing the surge.
-  float ringW = 0.18 * smoothstep(0.35, 0.6, seaNoise(vec2(along * 0.22, t * 0.3)));
-  float ring = 1.0 - smoothstep(ringW - 0.05, ringW, abs(d - (1.4 + surge * 1.2 + rag)));
-  ring *= step(0.001, ringW);
-  col = mix(col, uFoam, max(foam, ring * 0.9));
-
+  // Deepens smoothly from teal by the quay to dark blue out at sea.
+  vec3 col = mix(vec3(0.08, 0.36, 0.45), vec3(0.03, 0.17, 0.30), smoothstep(2.0, 60.0, d));
+  // Soft moving ripples: difference of two drifting noise fields, lightening the crests.
+  float r1 = seaFbm(p * vec2(0.35, 0.22) + vec2(t * 0.15, t * 0.05));
+  float r2 = seaFbm(p * vec2(0.22, 0.35) - vec2(t * 0.06, t * 0.14));
+  float rip = smoothstep(0.08, 0.0, abs(r1 - r2));
+  col += vec3(0.10, 0.16, 0.18) * rip * 0.6;
+  // Dark band where the wall meets the water.
+  col *= mix(0.55, 1.0, smoothstep(0.2, 1.6, d));
+  // Thin lip of foam lapping against the wall.
+  float lip = 0.12 + 0.18 * (0.5 + 0.5 * sin(t * 1.6 + along * 0.4)) + seaNoise(vec2(along * 0.8, t)) * 0.15;
+  col = mix(col, vec3(0.85, 0.93, 0.95), step(d, lip));
   return col;
 }
 `;
