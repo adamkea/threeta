@@ -1,4 +1,5 @@
 import { createRng } from '../core/random.js';
+import { WATER_LEVEL, buildShore, inPolygon, shoreGround } from './shoreLayout.js';
 import {
   bounds, centroid, chamferAcute, insideConvex, signedArea, simplify,
 } from './geom.js';
@@ -17,12 +18,12 @@ export const CITY = {
 };
 
 /** Height of the sea around the island; anything that goes over the edge falls to this. */
-export const WATER_Y = -0.6;
+export const WATER_Y = WATER_LEVEL;
 
 const STREET = 14;
 const AVENUE = 18;
-const DIAGONAL = 16;
-const N = 8; // blocks per side of the underlying lattice
+const COAST = 16; // the coast road round the island
+const N = 15; // blocks per side of the underlying lattice (bigger than the island)
 const BLOCK_SIZES = [34, 40, 40, 44, 44, 48, 52, 58];
 
 // Parking lot dimensions (m).
@@ -240,74 +241,215 @@ const EMPTY = [];
 function generate(seed) {
   const rng = createRng(seed);
 
-  // --- Lattice lines: uneven block sizes, one wide avenue each way ---
+  // --- Lattice lines: uneven block sizes, one wide avenue each way. The lattice is bigger than
+  // the island; the coastline (below) decides which part of it is land.
   const bxs = Array.from({ length: N }, () => rng.pick(BLOCK_SIZES));
   const bzs = Array.from({ length: N }, () => rng.pick(BLOCK_SIZES));
-  const avX = rng.int(2, 6), avZ = rng.int(2, 6);
+  const avX = rng.int(6, 9), avZ = rng.int(6, 9);
   const wx = (i) => (i === avX ? AVENUE : STREET); // width of the road along line x_i (runs along Z)
   const wz = (j) => (j === avZ ? AVENUE : STREET);
-  const span = (blocks, w) => blocks.reduce((a, b) => a + b, 0) + Array.from({ length: N + 1 }, (_, i) => w(i)).reduce((a, b) => a + b, 0);
-  // Square island: pad the shorter axis evenly.
-  let sx = span(bxs, wx), sz = span(bzs, wz);
-  const pad = (blocks, diff) => {
-    for (let k = 0; diff > 0; k = (k + 1) % N, diff -= 2) blocks[k] += Math.min(2, diff);
-  };
-  if (sx < sz) pad(bxs, sz - sx);
-  else pad(bzs, sx - sz);
-  sx = span(bxs, wx);
-  sz = span(bzs, wz);
-  const size = Math.max(sx, sz);
-  const half = size / 2;
   const lines = (blocks, w) => {
-    const out = [-half + w(0) / 2];
+    const out = [0];
     for (let i = 0; i < N; i++) out.push(out[i] + w(i) / 2 + blocks[i] + w(i + 1) / 2);
-    return out;
+    const mid = out[N] / 2;
+    return out.map((v) => v - mid);
   };
   const xs = lines(bxs, wx), zs = lines(bzs, wz);
+  const span = Math.max(xs[N] - xs[0], zs[N] - zs[0]);
 
   // --- Warp the lattice: a slow bend across town so streets curve and blocks skew, plus a
-  // little jitter per junction. The ring road round the island stays straight (its junctions
-  // only slide along it), and the bend fades out towards it.
+  // little jitter per junction.
   const ph = Array.from({ length: 4 }, () => rng.range(0, Math.PI * 2));
-  const k1 = (Math.PI * 2) / (size * 0.95), k2 = (Math.PI * 2) / (size * 0.42);
-  const taper = (i) => (i === 0 || i === N ? 0 : i === 1 || i === N - 1 ? 0.5 : 1);
-  const warp = (x, z, i, j) => [
-    taper(i) * (24 * Math.sin(z * k1 + ph[0]) + 5 * Math.sin((x + z) * k2 + ph[1]) + rng.range(-3, 3)),
-    taper(j) * (24 * Math.sin(x * k1 + ph[2]) + 5 * Math.sin((x - z) * k2 + ph[3]) + rng.range(-3, 3)),
+  const k1 = (Math.PI * 2) / (span * 0.7), k2 = (Math.PI * 2) / (span * 0.3);
+  const warp = (x, z) => [
+    24 * Math.sin(z * k1 + ph[0]) + 5 * Math.sin((x + z) * k2 + ph[1]) + rng.range(-3, 3),
+    24 * Math.sin(x * k1 + ph[2]) + 5 * Math.sin((x - z) * k2 + ph[3]) + rng.range(-3, 3),
   ];
+  const pos = []; // pos[i][j]: warped lattice junction
+  for (let i = 0; i <= N; i++) {
+    pos.push([]);
+    for (let j = 0; j <= N; j++) {
+      const [dx, dz] = warp(xs[i], zs[j]);
+      pos[i].push({ x: xs[i] + dx, z: zs[j] + dz });
+    }
+  }
+
+  // --- The coastline: an irregular blob (see islandDistance) decides which lattice blocks are
+  // land. A block with all four corners on the island is kept whole; one with three is cut
+  // corner to corner into a triangle. So the coast road only ever runs along existing streets or
+  // straight across a block, and every junction on it is an ordinary street corner: no stubs,
+  // no slivers.
+  const shape = islandShape(rng);
+  const val = pos.map((col) => col.map((p) => islandDistance(shape, p.x, p.z)));
+  const inside = (i, j) => i >= 0 && j >= 0 && i <= N && j <= N && val[i][j] < 0;
+  const corners = (i, j) => [[i, j], [i + 1, j], [i + 1, j + 1], [i, j + 1]]; // round the cell
+  // A block: whole (out = -1), or a triangle without corner `out`, its right angle opposite.
+  const makeCell = (i, j, out) => {
+    const c = corners(i, j);
+    if (out < 0) return { pts: c, out };
+    return { pts: [c[(out + 1) % 4], c[(out + 2) % 4], c[(out + 3) % 4]], right: c[(out + 2) % 4], out };
+  };
+  // land[i][j]: null, or the block's corners round it (4 = whole, 3 = triangle) and, for a
+  // triangle, its right-angle corner.
+  const land = [];
+  for (let i = 0; i < N; i++) {
+    land.push([]);
+    for (let j = 0; j < N; j++) {
+      const c = corners(i, j);
+      const inn = c.map(([a, b]) => inside(a, b));
+      const n = inn.filter(Boolean).length;
+      land[i].push(n === 4 ? makeCell(i, j, -1) : n === 3 && wideTriangle(i, j, inn.indexOf(false)) ? makeCell(i, j, inn.indexOf(false)) : null);
+    }
+  }
+  const cellAt = (i, j) => (i >= 0 && j >= 0 && i < N && j < N ? land[i][j] : null);
+  // Where the lattice is skewed, a block cut corner to corner can leave a thin wedge, which meets
+  // the coast road at a sharp angle. Only cut blocks whose triangle has no angle under 32 degrees.
+  function wideTriangle(i, j, out) {
+    const t = makeCell(i, j, out).pts.map(([a, b]) => pos[a][b]);
+    return t.every((p, k) => {
+      const q = t[(k + 1) % 3], r = t[(k + 2) % 3];
+      const ux = q.x - p.x, uz = q.z - p.z, vx = r.x - p.x, vz = r.z - p.z;
+      return Math.acos((ux * vx + uz * vz) / (Math.hypot(ux, uz) * Math.hypot(vx, vz))) > (32 * Math.PI) / 180;
+    });
+  }
+  const same = (p, q) => p[0] === q[0] && p[1] === q[1];
+
+  // Tidy the coastline: take off blocks that stick out on their own (joined to the rest along one
+  // street or none), and fill notches (a gap with land on three sides becomes a block; one in an
+  // inside corner gets a triangle across it). Sides: 0 north, 1 east, 2 south, 3 west.
+  const STEP = [[0, -1], [1, 0], [0, 1], [-1, 0]];
+  const hasSide = (cl, m) => !!cl && (cl.out < 0 || m === (cl.out + 1) % 4 || m === (cl.out + 2) % 4);
+  const joined = (i, j, m) => hasSide(cellAt(i + STEP[m][0], j + STEP[m][1]), (m + 2) % 4);
+  const tidy = () => {
+    let changed = false;
+    for (let pass = 0; pass < 12; pass++) {
+      let any = false;
+      for (let i = 0; i < N; i++) {
+        for (let j = 0; j < N; j++) {
+          const cl = land[i][j];
+          const links = [0, 1, 2, 3].filter((m) => joined(i, j, m) && (!cl || hasSide(cl, m)));
+          if (cl && links.length <= 1) (land[i][j] = null), (any = true);
+          else if (!cl && links.length >= 3) (land[i][j] = makeCell(i, j, -1)), (any = true);
+          else if (!cl && links.length === 2 && (links[1] - links[0] === 1 || links[1] - links[0] === 3)) {
+            const m = links[1] - links[0] === 1 ? links[0] : links[1]; // the first of the two, going round
+            if (wideTriangle(i, j, (m + 3) % 4)) {
+              land[i][j] = makeCell(i, j, (m + 3) % 4);
+              any = true;
+            }
+          } else if (cl && cl.out >= 0 && links.length >= 3) (land[i][j] = makeCell(i, j, -1)), (any = true);
+        }
+      }
+      if (!any) break;
+      changed = true;
+    }
+    return changed;
+  };
+
+  // No pinches: where two pieces of land would touch at a single junction, the coast road would
+  // run through it twice. Drop a piece there (a triangle if there is one) until none are left.
+  // Sharp points of land go the same way.
+  const covers = (cl, node, toward) => {
+    if (!cl) return false;
+    if (cl.pts.length === 4) return true;
+    if (!cl.pts.some((p) => same(p, node))) return false;
+    return same(cl.right, node) || same(cl.right, toward);
+  };
+  for (let changed = true; changed; ) {
+    changed = tidy();
+    for (let i = 0; i <= N && !changed; i++) {
+      for (let j = 0; j <= N && !changed; j++) {
+        // The four blocks round the junction in turn, each split into the halves next to its two streets.
+        const round = [[i, j, 0], [i - 1, j, 1], [i - 1, j - 1, 2], [i, j - 1, 3]];
+        const slots = [];
+        for (const [ci, cj, k] of round) {
+          const c = corners(ci, cj);
+          slots.push(covers(cellAt(ci, cj), [i, j], c[(k + 1) % 4]), covers(cellAt(ci, cj), [i, j], c[(k + 3) % 4]));
+        }
+        let arcs = 0;
+        for (let k = 0; k < 8; k++) if (slots[k] && !slots[(k + 7) % 8]) arcs++;
+        // How much land there is round the junction, as an angle: a sharp point of land (less
+        // than ~100 degrees) makes a pointed headland, so trim it (a square corner gets cut back
+        // to a triangle by tidy()).
+        let angle = 0;
+        round.forEach(([ci, cj, k], r) => {
+          if (!cellAt(ci, cj)) return;
+          const c = corners(ci, cj);
+          const P = pos[i][j], D = pos[c[(k + 2) % 4][0]][c[(k + 2) % 4][1]];
+          for (const [h, m] of [[0, (k + 1) % 4], [1, (k + 3) % 4]]) {
+            if (!slots[r * 2 + h]) continue;
+            const E = pos[c[m][0]][c[m][1]];
+            const a1 = Math.atan2(E.z - P.z, E.x - P.x), a2 = Math.atan2(D.z - P.z, D.x - P.x);
+            angle += Math.abs(Math.atan2(Math.sin(a1 - a2), Math.cos(a1 - a2)));
+          }
+        });
+        const spike = angle > 0 && angle < (100 * Math.PI) / 180;
+        if (arcs < 2 && !spike) continue;
+        const touching = round.filter(([ci, cj]) => cellAt(ci, cj));
+        const drop = touching.find(([ci, cj]) => cellAt(ci, cj).pts.length === 3) ?? touching[0];
+        land[drop[0]][drop[1]] = null;
+        changed = true;
+      }
+    }
+  }
+
+  // Every block's sides, as streets: lattice streets, or the cut across a triangle.
+  const sideKey = (p, q) => {
+    const a = p[0] * 1000 + p[1], b = q[0] * 1000 + q[1];
+    return a < b ? `${a}-${b}` : `${b}-${a}`;
+  };
+  const sides = new Map(); // key -> { p, q, uses }
+  const kept = [];
+  for (let i = 0; i < N; i++) for (let j = 0; j < N; j++) if (land[i][j]) kept.push([i, j]);
+  const sidesOf = ([i, j]) => land[i][j].pts.map((p, k, pts) => [p, pts[(k + 1) % pts.length]]);
+  // Keep only the biggest piece of land (blocks joined along a street).
+  const owner = new Map();
+  for (const c of kept) for (const [p, q] of sidesOf(c)) {
+    const k = sideKey(p, q);
+    if (!owner.has(k)) owner.set(k, []);
+    owner.get(k).push(c);
+  }
+  const comp = new Map();
+  let best = null;
+  for (const c of kept) {
+    if (comp.has(c)) continue;
+    const piece = [c];
+    comp.set(c, piece);
+    for (let k = 0; k < piece.length; k++) {
+      for (const [p, q] of sidesOf(piece[k])) {
+        for (const o of owner.get(sideKey(p, q))) if (!comp.has(o)) (comp.set(o, piece), piece.push(o));
+      }
+    }
+    if (!best || piece.length > best.length) best = piece;
+  }
+  for (const c of kept) if (comp.get(c) !== best) land[c[0]][c[1]] = null;
+  for (const c of best) {
+    for (const [p, q] of sidesOf(c)) {
+      const k = sideKey(p, q);
+      if (!sides.has(k)) sides.set(k, { p, q, uses: 0 });
+      sides.get(k).uses++;
+    }
+  }
 
   const g = new RoadGraph();
-  const grid = [];
-  for (let i = 0; i <= N; i++) {
-    grid.push([]);
-    for (let j = 0; j <= N; j++) {
-      const [dx, dz] = warp(xs[i], zs[j], i, j);
-      grid[i].push(g.addNode(xs[i] + dx, zs[j] + dz));
-    }
-  }
+  const grid = pos.map((col) => col.map(() => -1));
+  const node = ([i, j]) => (grid[i][j] >= 0 ? grid[i][j] : (grid[i][j] = g.addNode(pos[i][j].x, pos[i][j].z)));
   const hEdge = [], vEdge = []; // hEdge[i][j]: (i,j)-(i+1,j) along X; vEdge[i][j]: (i,j)-(i,j+1) along Z
-  for (let i = 0; i <= N; i++) {
-    hEdge.push([]);
-    vEdge.push([]);
-    for (let j = 0; j <= N; j++) {
-      if (i < N) hEdge[i][j] = g.addEdge(grid[i][j], grid[i + 1][j], wz(j), j === avZ ? 'avenue' : 'street');
-      if (j < N) vEdge[i][j] = g.addEdge(grid[i][j], grid[i][j + 1], wx(i), i === avX ? 'avenue' : 'street');
-    }
+  for (let i = 0; i <= N; i++) (hEdge[i] = []), (vEdge[i] = []);
+  for (const { p, q, uses } of sides.values()) {
+    const coast = uses === 1; // land on one side only: the coast road
+    let width = COAST, kind = 'coast';
+    if (p[1] === q[1] && !coast) (width = wz(p[1])), (kind = p[1] === avZ ? 'avenue' : 'street');
+    if (p[0] === q[0] && !coast) (width = wx(p[0])), (kind = p[0] === avX ? 'avenue' : 'street');
+    const e = g.addEdge(node(p), node(q), width, kind);
+    if (p[1] === q[1]) hEdge[Math.min(p[0], q[0])][p[1]] = e;
+    else if (p[0] === q[0]) vEdge[p[0]][Math.min(p[1], q[1])] = e;
   }
+  const full = (i, j) => cellAt(i, j)?.pts.length === 4;
+  const cellSolid = full;
+  // Interior: all four blocks round the junction are whole, so its streets are ordinary crossroads.
+  const deep = (i, j) => full(i, j) && full(i - 1, j) && full(i - 1, j - 1) && full(i, j - 1);
 
-  // --- Diagonal avenues, cutting corner to corner through runs of blocks ---
   const reserved = new Set(); // blocks (bx * 100 + bz) that can't be merged
-  const diagNodes = new Set();
-  const diagonal = (path) => {
-    for (let k = 0; k + 1 < path.length; k++) {
-      const [i0, j0] = path[k], [i1, j1] = path[k + 1];
-      g.addEdge(grid[i0][j0], grid[i1][j1], DIAGONAL, 'avenue');
-      reserved.add(Math.min(i0, i1) * 100 + Math.min(j0, j1));
-      diagNodes.add(grid[i0][j0]).add(grid[i1][j1]);
-    }
-  };
-  diagonal(Array.from({ length: 7 }, (_, k) => [k, 6 - k])); // ring (west) to ring (north)
-  diagonal(Array.from({ length: 4 }, (_, k) => [4 + k, 4 + k])); // a shorter one, south-east of the centre
 
   // --- Superblocks: a 2x2 park, plus pairs of blocks joined where a street is closed ---
   const touched = new Set(); // nodes next to a closed street
@@ -316,7 +458,17 @@ function generate(seed) {
     g.edges[e].removed = true;
     touched.add(g.edges[e].a).add(g.edges[e].b);
   };
-  const PX = 5, PZ = 1; // park's top-left block
+  // The park goes on the deep junction nearest to the north-east of the middle of town.
+  let park = null;
+  for (let i = 1; i < N; i++) {
+    for (let j = 1; j < N; j++) {
+      const ok = [[0, 0], [1, 0], [-1, 0], [0, 1], [0, -1]].every(([a, b]) => deep(i + a, j + b));
+      if (!ok || [[-1, -1], [0, -1], [-1, 0], [0, 0]].some(([a, b]) => reserved.has((i + a) * 100 + j + b))) continue;
+      const p = pos[i][j], d = Math.hypot(p.x - 0.3 * span * 0.4, p.z + 0.35 * span * 0.4);
+      if (!park || d < park.d) park = { i, j, d };
+    }
+  }
+  const PX = park.i - 1, PZ = park.j - 1; // park's top-left block
   for (const e of [vEdge[PX + 1][PZ], vEdge[PX + 1][PZ + 1], hEdge[PX][PZ + 1], hEdge[PX + 1][PZ + 1]]) close(e);
   for (const [a, b] of [[0, 0], [1, 0], [0, 1], [1, 1]]) merged.set((PX + a) * 100 + PZ + b, 'park');
   const parkPoint = { x: g.nodes[grid[PX + 1][PZ + 1]].x, z: g.nodes[grid[PX + 1][PZ + 1]].z };
@@ -324,20 +476,20 @@ function generate(seed) {
   const pairs = [];
   for (let bx = 0; bx < N; bx++) {
     for (let bz = 0; bz < N; bz++) {
-      if (bx + 1 < N) pairs.push([bx, bz, bx + 1, bz, vEdge[bx + 1][bz]]);
-      if (bz + 1 < N) pairs.push([bx, bz, bx, bz + 1, hEdge[bx][bz + 1]]);
+      if (bx + 1 < N) pairs.push([bx, bz, bx + 1, bz, vEdge[bx + 1][bz], [bx + 1, bz], [bx + 1, bz + 1]]);
+      if (bz + 1 < N) pairs.push([bx, bz, bx, bz + 1, hEdge[bx][bz + 1], [bx, bz + 1], [bx + 1, bz + 1]]);
     }
   }
   shuffle(pairs, rng);
   let joins = 0;
-  for (const [ax, az, bx, bz, e] of pairs) {
-    if (joins >= 9) break;
+  for (const [ax, az, bx, bz, e, endA, endB] of pairs) {
+    if (joins >= 12) break;
     const ka = ax * 100 + az, kb = bx * 100 + bz;
     if (reserved.has(ka) || reserved.has(kb) || merged.has(ka) || merged.has(kb)) continue;
+    // Only interior streets (both ends ordinary 4-way crossroads, well away from the coast).
+    if (!deep(...endA) || !deep(...endB)) continue;
     const { a, b } = g.edges[e];
-    if (touched.has(a) || touched.has(b) || diagNodes.has(a) || diagNodes.has(b)) continue;
-    // Only interior streets (both ends ordinary 4-way crossroads).
-    if (isRing(g.nodes[a], xs, zs) || isRing(g.nodes[b], xs, zs)) continue;
+    if (touched.has(a) || touched.has(b)) continue;
     close(e);
     merged.set(ka, 'pair').set(kb, 'pair');
     joins++;
@@ -366,11 +518,17 @@ function generate(seed) {
     n.z = A.z + lz * t;
   }
 
+  keepLargestPiece(g);
   g.compact();
   g.finalize();
 
   const blocks = traceBlocks(g);
-  const layout = { graph: g, blocks, size, half, lots: [], landmarks: [], spawn: null, parkPoint };
+  const shore = buildShore(outerCurb(g), rng, shoreKindAt);
+  const { minX, minZ, maxX, maxZ } = shore.bounds;
+  const half = Math.ceil(Math.max(-minX, -minZ, maxX, maxZ)) + 4;
+  // Typical distance from the middle of town to the coast road: what "downtown" is measured against.
+  const radius = shore.curb.reduce((a, p) => a + Math.hypot(p.x, p.z), 0) / shore.curb.length;
+  const layout = { graph: g, blocks, shore, size: half * 2, half, radius, lots: [], landmarks: [], spawn: null, parkPoint };
   assignUses(layout, rng);
   layout.walk = buildWalkGraph(g, blocks);
   layout.blockHash = new BucketGrid(16);
@@ -382,9 +540,118 @@ function generate(seed) {
   return layout;
 }
 
-function isRing(n, xs, zs) {
-  const eps = 0.01;
-  return Math.abs(n.x - xs[0]) < eps || Math.abs(n.x - xs[N]) < eps || Math.abs(n.z - zs[0]) < eps || Math.abs(n.z - zs[N]) < eps;
+/**
+ * The island's outline: a squashed blob with a few lobes, a bay and a headland, so it reads as a
+ * coastline rather than a circle. Returns the parameters for islandDistance.
+ */
+function islandShape(rng) {
+  return {
+    R: 328,
+    sx: 0.86, // narrower east-west than north-south
+    sz: 1.12,
+    // [harmonic, amplitude, phase]: low ones give the overall lobes, higher ones the bays.
+    waves: [
+      [2, 0.06, rng.range(0, Math.PI * 2)],
+      [3, 0.08, rng.range(0, Math.PI * 2)],
+      [4, 0.04, rng.range(0, Math.PI * 2)],
+      [5, 0.03, rng.range(0, Math.PI * 2)],
+      [7, 0.02, rng.range(0, Math.PI * 2)],
+    ],
+    // A harbour bay biting into the east coast, a headland pushing out to the south-west, and a
+    // smaller cove in the north-west.
+    bumps: [
+      { a: -0.15, r: 0.28, w: -0.3 },
+      { a: 2.3, r: 0.35, w: 0.16 },
+      { a: -2.0, r: 0.22, w: -0.1 },
+      { a: 1.2, r: 0.3, w: 0.08 },
+    ],
+  };
+}
+
+/** Roughly the distance (m) from a point to the coastline: negative on land, positive at sea. */
+function islandDistance(s, x, z) {
+  const u = x / s.sx, v = z / s.sz;
+  const a = Math.atan2(v, u);
+  let r = 1;
+  for (const [k, amp, ph] of s.waves) r += amp * Math.cos(k * a + ph);
+  for (const b of s.bumps) {
+    let d = a - b.a;
+    d = Math.atan2(Math.sin(d), Math.cos(d));
+    r += b.w * Math.exp(-((d / b.r) ** 2));
+  }
+  return (Math.hypot(u, v) - r * s.R) * Math.min(s.sx, s.sz);
+}
+
+const angleGap = (a, b) => Math.abs(Math.atan2(Math.sin(a - b), Math.cos(a - b)));
+
+// What each side of the island's coast is. Angles are round the middle of town (atan2(z, x):
+// 0 is east, π/2 south, ±π west, -π/2 north). The whole east side, round the harbour bay, is a
+// shipyard (a deep quay with a container yard, gantry cranes and cargo ships alongside); the south
+// end is beach; the west is a wooden waterfront with piers sticking out; and in the north the
+// promenade just ends in a seawall with a barrier along it. Named sectors get a warehouse.
+export const SHORE_SECTORS = [
+  { from: -1.07, to: 1.03, kind: 'yard', name: 'Dockside Freight' },
+  { from: 1.03, to: 2.3, kind: 'beach' },
+  { from: 2.3, to: 4.08, kind: 'wharf', name: 'Pier Street Storage' }, // wraps past ±π
+  { from: -2.2, to: -1.07, kind: 'seawall' },
+];
+const sectorAt = (a) => SHORE_SECTORS.find((s) => {
+  const t = ((a - s.from) % (Math.PI * 2) + Math.PI * 2) % (Math.PI * 2);
+  return t < s.to - s.from;
+}) ?? SHORE_SECTORS[0];
+const shoreKindAt = (x, z) => sectorAt(Math.atan2(z, x)).kind;
+
+/** The outer curb of the whole road network: the curb line along the sea side of the coast road. */
+function outerCurb(g) {
+  const seen = new Uint8Array(g.edges.length * 2);
+  let best = null;
+  for (let h0 = 0; h0 < g.edges.length * 2; h0++) {
+    if (seen[h0]) continue;
+    const hs = [];
+    let h = h0;
+    do {
+      hs.push(h);
+      seen[h] = 1;
+      const v = g.nodes[g.to(h)];
+      const k = v.out.indexOf(h ^ 1);
+      h = v.out[(k - 1 + v.out.length) % v.out.length];
+    } while (h !== h0 && hs.length < 4096);
+    const area = signedArea(hs.map((x) => g.nodes[g.from(x)]));
+    if (!best || area < best.area) best = { hs, area };
+  }
+  const hs = best.hs;
+  g.outerFace = hs;
+  return hs.map((hOut, k) => {
+    const c = cornerAt(g, g.from(hOut), hs[(k + hs.length - 1) % hs.length], hOut);
+    return { x: c.x, z: c.z };
+  });
+}
+
+/** Drops roads not connected to the biggest connected piece of the network (islets offshore). */
+function keepLargestPiece(g) {
+  const adj = g.nodes.map(() => []);
+  for (const e of g.edges) {
+    if (e.removed) continue;
+    adj[e.a].push(e.b);
+    adj[e.b].push(e.a);
+  }
+  const comp = new Int32Array(g.nodes.length).fill(-1);
+  const sizes = [];
+  for (let s = 0; s < g.nodes.length; s++) {
+    if (comp[s] >= 0 || !adj[s].length) continue;
+    const c = sizes.length;
+    let n = 0;
+    const stack = [s];
+    comp[s] = c;
+    while (stack.length) {
+      const v = stack.pop();
+      n++;
+      for (const w of adj[v]) if (comp[w] < 0) (comp[w] = c), stack.push(w);
+    }
+    sizes.push(n);
+  }
+  const best = sizes.indexOf(Math.max(...sizes));
+  for (const e of g.edges) if (comp[e.a] !== best) e.removed = true;
 }
 
 function shuffle(a, rng) {
@@ -513,7 +780,7 @@ const LOT_HD = (4 * LOT.bayDepth + 2 * LOT_AISLE) / 2; // paved half-depth
 
 /** Decides what goes on each block: landmarks, the starting car park, parks, other lots, buildings. */
 function assignUses(layout, rng) {
-  const { blocks, half, graph: g } = layout;
+  const { blocks, radius: half, graph: g } = layout;
   const free = (b) => b.use === 'buildings';
   const typical = blocks.map((b) => b.area).sort((a, c) => a - c)[blocks.length >> 1];
   for (const b of blocks) {
@@ -576,8 +843,13 @@ function assignUses(layout, rng) {
     ['police', -0.3 * half, 0.15 * half],
     ['hospital', 0.3 * half, -0.35 * half],
     ['gunshop', sc.x, sc.z],
-    ['warehouse', 0.7 * half, 0.65 * half, 'Dockside Freight'],
-    ['warehouse', -0.7 * half, -0.6 * half, 'Northgate Storage'],
+    ...SHORE_SECTORS.filter((d) => d.name).map((d) => {
+      // A block back from the middle of the waterfront.
+      const mid = (d.from + d.to) / 2;
+      const p = layout.shore.curb.reduce((a, c) => (angleGap(Math.atan2(c.z, c.x), mid) < angleGap(Math.atan2(a.z, a.x), mid) ? c : a));
+      const k = 1 - 45 / Math.hypot(p.x, p.z);
+      return ['warehouse', p.x * k, p.z * k, d.name];
+    }),
   ];
   for (const [kind, x, z, name] of sites) {
     const found = nearest(x, z, (b) => fitRect(b, b.frame, 19, 19));
@@ -733,9 +1005,24 @@ export const LAYOUT = generate(4242);
 CITY.size = LAYOUT.size;
 CITY.half = LAYOUT.half;
 
-/** True once a point is past the quayside, over open water. */
+/** True once a point is past the shore (over open water: off a quay, a pier or the beach). */
 export function offIsland(x, z) {
-  return Math.abs(x) > CITY.half || Math.abs(z) > CITY.half;
+  const sh = LAYOUT.shore;
+  const bb = sh.bounds;
+  if (x < bb.minX || x > bb.maxX || z < bb.minZ || z > bb.maxZ) return true;
+  const g = shoreGround(sh, x, z);
+  if (g) return g.kind === 'sea';
+  return !inPolygon(sh.curb, x, z); // in town, or out past the end of the shore
+}
+
+/**
+ * Height a vehicle's wheels sit at: road level, except on the beaches (the sand slopes down into
+ * the sea) and up on the piers. (Cars ride over curbs and sidewalks at road level.)
+ */
+export function driveHeight(x, z) {
+  const g = shoreGround(LAYOUT.shore, x, z);
+  if (!g || g.kind === 'promenade' || g.kind === 'dock') return 0;
+  return g.height;
 }
 
 /** The block (sidewalk slab) under a point, or null on the road. */
@@ -749,10 +1036,16 @@ export function blockAt(x, z) {
   return null;
 }
 
-/** Ground height at a point: raised on sidewalks/blocks, 0 on roads (and in parking lots). */
+/**
+ * Ground height at a point: raised on sidewalks/blocks and the promenade and docks, 0 on roads
+ * (and in parking lots), sloping down into the sea on the beaches.
+ */
 export function groundHeight(x, z) {
   const b = blockAt(x, z);
-  if (!b) return 0;
+  if (!b) {
+    const g = shoreGround(LAYOUT.shore, x, z);
+    return g ? g.height : 0;
+  }
   if (b.lot) {
     const lot = b.lot;
     const p = toLocal(lot, lot.cx, lot.cz, x, z);
@@ -762,8 +1055,6 @@ export function groundHeight(x, z) {
   }
   return CITY.curbHeight;
 }
-
-
 
 /** Height of the park lawns' top face (the turf sits a little proud of the sidewalk slab). */
 export const GRASS_TOP = CITY.curbHeight + 0.1;

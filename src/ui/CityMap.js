@@ -1,5 +1,6 @@
 import { CITY, LAYOUT, LOT } from '../world/City.js';
 import { offsetConvex } from '../world/geom.js';
+import { PROMENADE } from '../world/shoreLayout.js';
 
 // Map of the whole city on a 2D canvas over the game. Same north-up view as the camera:
 // +X is right, +Z is down. The streets and buildings are drawn once to an offscreen
@@ -10,7 +11,17 @@ const WATER = '#2f8fb8';
 const ROAD = '#5b5d63';
 const SIDEWALK = '#c9c6bd';
 const GRASS = '#5fae3f';
+const SAND = '#ecd79c';
+const DOCK = '#a9a69d';
+const WOOD = '#9b7a52';
+const SHIP = '#7a2a22';
 const MARGIN = 18; // metres of water shown round the island
+
+// The square of the world the map shows: centred on the island, big enough for all of it.
+const VIEW = (() => {
+  const b = LAYOUT.shore.bounds;
+  return { cx: (b.minX + b.maxX) / 2, cz: (b.minZ + b.maxZ) / 2, span: Math.max(b.maxX - b.minX, b.maxZ - b.minZ) };
+})();
 
 export class CityMap {
   constructor(city, el) {
@@ -43,12 +54,12 @@ export class CityMap {
 
   /** Map metres -> canvas pixels for a square canvas of `size` px. */
   scaleFor(size) {
-    return size / (CITY.size + MARGIN * 2);
+    return size / (VIEW.span + MARGIN * 2);
   }
 
   toPx(x, z, size) {
     const s = this.scaleFor(size);
-    return [(x + CITY.half + MARGIN) * s, (z + CITY.half + MARGIN) * s];
+    return [(x - VIEW.cx + VIEW.span / 2 + MARGIN) * s, (z - VIEW.cz + VIEW.span / 2 + MARGIN) * s];
   }
 
   drawBase(size) {
@@ -64,12 +75,6 @@ export class CityMap {
 
     g.fillStyle = WATER;
     g.fillRect(0, 0, size, size);
-    // Island of asphalt, with the sea wall as an inked border.
-    g.fillStyle = ROAD;
-    g.fillRect(...rect(-CITY.half, -CITY.half, CITY.half, CITY.half));
-    g.lineWidth = Math.max(2, 2 * s);
-    g.strokeStyle = '#9a9384';
-    g.strokeRect(...rect(-CITY.half, -CITY.half, CITY.half, CITY.half));
 
     const path = (poly) => {
       g.beginPath();
@@ -80,6 +85,37 @@ export class CityMap {
       });
       g.closePath();
     };
+
+    // The shore: beaches and docks out to the waterline, the promenade along the coast road, the
+    // piers, then the asphalt of the road network inside it.
+    const shore = LAYOUT.shore;
+    for (const sg of shore.segs) {
+      g.fillStyle = { beach: SAND, wharf: WOOD, seawall: SIDEWALK }[sg.kind] ?? DOCK;
+      path([sg.quad[0], sg.quad[1], shore.at(sg.j, sg.w1), shore.at(sg.i, sg.w0)]);
+      g.fill();
+      g.strokeStyle = g.fillStyle; // hide hairline seams between the pieces
+      g.lineWidth = 1;
+      g.stroke();
+      g.fillStyle = SIDEWALK;
+      path([sg.quad[0], sg.quad[1], shore.at(sg.j, PROMENADE), shore.at(sg.i, PROMENADE)]);
+      g.fill();
+    }
+    g.fillStyle = WOOD;
+    for (const p of shore.piers) {
+      path(p.poly);
+      g.fill();
+    }
+    g.fillStyle = SHIP;
+    g.strokeStyle = INK;
+    g.lineWidth = Math.max(1, 0.35 * s);
+    for (const p of shore.ships) {
+      path(p.poly);
+      g.fill();
+      g.stroke();
+    }
+    g.fillStyle = ROAD;
+    path(shore.curb);
+    g.fill();
 
     // Double-yellow centre lines along every road.
     const graph = LAYOUT.graph;
