@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { circlePush } from '../world/colliders.js';
 import { MODELS, buildCarMesh } from './carModels.js';
-import { offIsland, WATER_Y } from '../world/City.js';
+import { driveHeight, offIsland, WATER_Y } from '../world/City.js';
 import { showBone } from '../render/skinBake.js';
 import { VehicleDamage } from './damage.js';
 import { SirenGlow } from '../effects/SirenGlow.js';
@@ -240,6 +240,9 @@ export class Car {
     this.preVel.copy(this.velocity);
     this.damage.update(dt);
     if (this.overboard) return this.#fall(dt);
+    // Ride up onto a pier, or down the beach towards the sea.
+    const ground = driveHeight(this.position.x, this.position.y);
+    this.y += (ground - this.y) * Math.min(1, 12 * dt);
     const c = this.cfg;
     // Damage saps the engine and steering; a wreck gets no input at all.
     const dmg = this.damage.state;

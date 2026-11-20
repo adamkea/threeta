@@ -506,7 +506,7 @@ const PLACES = {
   },
   diagonal: () => {
     const g = LAYOUT.graph;
-    const e = g.edges.filter((x) => x.width === 16)[2]; // the diagonal avenues are 16 m wide
+    const e = g.edges.filter((x) => x.kind === 'avenue' && x.width === 16)[2]; // the diagonal avenues are 16 m wide
     const A = g.nodes[e.a];
     return { x: A.x + e.dx * e.len * 0.5, z: A.z + e.dz * e.len * 0.5 };
   },

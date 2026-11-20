@@ -135,9 +135,13 @@ The city isn't a plain grid any more. `src/world/CityLayout.js` generates it, de
 **road graph**: junctions joined by straight roads of any angle and width. Every system drives, walks and
 draws from that graph.
 
-- **Bent streets:** the underlying 8×8 lattice gets uneven row and column widths (34–58 m), then a slow
+- **Bent streets:** the underlying 15×15 lattice gets uneven row and column widths (34–58 m), then a slow
   warp across town and a little jitter per junction. Streets curve gently and blocks become skewed
-  quadrilaterals. The ring road round the island stays straight.
+  quadrilaterals.
+- **An island, not a square:** the lattice is bigger than the island. An irregular outline (a squashed
+  blob with lobes, a harbour bay on the east coast, a headland to the south-west: `islandShape()`)
+  decides which part of it is land. A **coast road** runs round the edge: marching squares over the
+  lattice give it one straight stretch per cell it crosses, so the blocks it trims stay convex.
 - **Avenues:** one wide (18 m) avenue each way, and **two diagonal avenues** cutting corner to corner
   through runs of blocks. They split those blocks into triangles and make big 6-way junctions with
   three-phase signals.
@@ -146,6 +150,14 @@ draws from that graph.
 - **Blocks are convex polygons** (the faces of the graph). They are filled with buildings by splitting the
   footprint along its longest side, so plots sit square to their street. The police station, hospital and
   car parks are turned to line up with their block. Some blocks are parks or triangular plazas.
+
+Outside the coast road is the **shore** (`src/world/shoreLayout.js` for the layout, `Shore.js` for the
+meshes). A paved promenade with street lamps runs right round the island along the curb. Beyond it,
+each stretch of coast is either a **beach** (sand sloping down into shallow turquoise water with surf,
+palm trees, parasols and lifeguard towers) or a **dock** (concrete out to a quay wall, with bollards
+and stacked shipping containers). Wooden **piers** stick out from the docks, and a long railed pleasure
+pier runs out from the beach. You can walk and drive on all of it, and over the edge into the sea.
+`DOCK_ARCS` in `CityLayout.js` says which stretches of coast are docks; the warehouses sit behind them.
 
 To change the layout, edit `generate()` in `CityLayout.js`: block sizes, warp strength, which lines are
 avenues, the diagonals' paths, which streets close. Junction geometry (how far each junction box reaches, crosswalks,
