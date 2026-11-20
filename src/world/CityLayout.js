@@ -22,7 +22,6 @@ export const WATER_Y = WATER_LEVEL;
 
 const STREET = 14;
 const AVENUE = 18;
-const DIAGONAL = 16;
 const COAST = 16; // the coast road round the island
 const N = 15; // blocks per side of the underlying lattice (bigger than the island)
 const BLOCK_SIZES = [34, 40, 40, 44, 44, 48, 52, 58];
@@ -450,21 +449,7 @@ function generate(seed) {
   // Interior: all four blocks round the junction are whole, so its streets are ordinary crossroads.
   const deep = (i, j) => full(i, j) && full(i - 1, j) && full(i - 1, j - 1) && full(i, j - 1);
 
-  // --- Diagonal avenues, cutting corner to corner through runs of solid blocks ---
   const reserved = new Set(); // blocks (bx * 100 + bz) that can't be merged
-  const diagNodes = new Set();
-  const diagonal = (path) => {
-    for (let k = 0; k + 1 < path.length; k++) {
-      const [i0, j0] = path[k], [i1, j1] = path[k + 1];
-      const ci = Math.min(i0, i1), cj = Math.min(j0, j1);
-      if (!cellSolid(ci, cj) || !deep(i0, j0) || !deep(i1, j1)) continue; // stop short of the coast road
-      g.addEdge(grid[i0][j0], grid[i1][j1], DIAGONAL, 'avenue');
-      reserved.add(ci * 100 + cj);
-      diagNodes.add(grid[i0][j0]).add(grid[i1][j1]);
-    }
-  };
-  diagonal(Array.from({ length: N - 1 }, (_, k) => [k + 1, N - 3 - k])); // south-west to north-east, across town
-  diagonal(Array.from({ length: 4 }, (_, k) => [8 + k, 8 + k])); // a shorter one, south-east of the centre
 
   // --- Superblocks: a 2x2 park, plus pairs of blocks joined where a street is closed ---
   const touched = new Set(); // nodes next to a closed street
@@ -504,7 +489,7 @@ function generate(seed) {
     // Only interior streets (both ends ordinary 4-way crossroads, well away from the coast).
     if (!deep(...endA) || !deep(...endB)) continue;
     const { a, b } = g.edges[e];
-    if (touched.has(a) || touched.has(b) || diagNodes.has(a) || diagNodes.has(b)) continue;
+    if (touched.has(a) || touched.has(b)) continue;
     close(e);
     merged.set(ka, 'pair').set(kb, 'pair');
     joins++;

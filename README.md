@@ -143,11 +143,10 @@ draws from that graph.
   a block with all four corners on the island is kept whole, one with three is cut corner to corner
   into a triangle. A tidy-up pass drops blocks that stick out on their own, sharp points and thin
   wedges, and fills notches. The **coast road** round the edge therefore only runs along ordinary
-  streets or straight across a block, so every junction on it is a plain street corner. The diagonal
-  avenues stop one junction short of it.
-- **Avenues:** one wide (18 m) avenue each way, and **two diagonal avenues** cutting corner to corner
-  through runs of blocks. They split those blocks into triangles and make big 6-way junctions with
-  three-phase signals.
+  streets or straight across a block, so every junction on it is a plain street corner.
+- **Avenues:** one wide (18 m) avenue each way. No junction has more than four roads: there used to be
+  diagonal avenues, but on this grid they made either 6-way junctions or pairs of crossings crammed
+  together.
 - **Superblocks:** a 2×2 park and several pairs of blocks joined where a street was closed, which leaves
   T-junctions behind.
 - **Blocks are convex polygons** (the faces of the graph). They are filled with buildings by splitting the
@@ -173,10 +172,10 @@ You can walk and drive on all of it, and off the edges (barrier aside) into the 
 `SHORE_SECTORS` in `CityLayout.js` says which stretch of coast is which.
 
 To change the layout, edit `generate()` in `CityLayout.js`: block sizes, warp strength, which lines are
-avenues, the diagonals' paths, which streets close. Junction geometry (how far each junction box reaches, crosswalks,
+avenues, which streets close. Junction geometry (how far each junction box reaches, crosswalks,
 stop lines, signal phases and poles) is all derived from the graph.
 
-Dev console (**`**): `tp <x> <z>` or `tp spawn | police | hospital | gunshop | warehouse | phone | diagonal | park` teleports you.
+Dev console (**`**): `tp <x> <z>` or `tp spawn | police | hospital | gunshop | warehouse | phone | coast | park` teleports you.
 
 ## Look
 
