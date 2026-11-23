@@ -5,12 +5,13 @@ import * as THREE from 'three';
  * Looks ahead in the direction of travel and pulls back as speed rises.
  */
 export class CameraRig {
-  constructor(camera, { height = 85, maxHeight = 120, tilt = 0.3, lookAhead = 0.55 } = {}) {
+  constructor(camera, { height = 50, maxHeight = 72, tilt = 0.3, lookAhead = 0.55, maxLeadPerHeight = 0.14 } = {}) {
     this.camera = camera;
     this.height = height;
     this.maxHeight = maxHeight;
     this.tilt = tilt; // horizontal offset per unit height (0 = straight down)
     this.lookAhead = lookAhead; // seconds of velocity to lead the target by
+    this.maxLeadPerHeight = maxLeadPerHeight; // lead cap as a fraction of camera height
     this.focus = new THREE.Vector3();
     this.currentHeight = height;
     this.initialised = false;
@@ -23,8 +24,10 @@ export class CameraRig {
   }
 
   update(dt, target) {
+    if (!this.initialised) this.currentHeight = this.height;
     const lead = new THREE.Vector3(target.velocity.x, 0, target.velocity.y).multiplyScalar(this.lookAhead);
-    lead.clampLength(0, 16);
+    // Scale the lead with zoom so a close camera never pushes the target off screen.
+    lead.clampLength(0, Math.min(16, this.currentHeight * this.maxLeadPerHeight));
     const desired = new THREE.Vector3(target.position.x, 0, target.position.y).add(lead);
 
     const speedT = Math.min(1, target.speed / 30);

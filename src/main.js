@@ -218,7 +218,7 @@ const onRoad = (p) => !p.dead && groundHeight(p.position.x, p.position.y) === 0;
 // --- Camera, input, HUD ---
 const input = new Input();
 const rig = new CameraRig(camera);
-const ZOOM = { car: [85, 120], foot: [40, 46], interior: [30, 30] };
+const ZOOM = { car: [50, 72], foot: [34, 38], interior: [30, 30] };
 const speedBox = document.getElementById('speed');
 const speedEl = document.getElementById('speed-value');
 const promptEl = document.getElementById('prompt');
