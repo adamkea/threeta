@@ -173,6 +173,12 @@ export class Pedestrian {
     this.hurtFrom = null; // Vector2 position of whoever last hurt us (non-fatally); observers clear it
     this.weapon = null; // weapon definition being held (visual + aim pose), or null
     this.recoil = 0; // 0..1 kick of the gun arm, decays
+    // Scripted upper-body pose layered over the walk cycle: 'grab' (an officer holding someone),
+    // 'grabbed' (struggling in someone's grip), 'cuffed' (hands behind the back), or null.
+    this.pose = null;
+    this.poseBlend = 0; // 0 = plain walk cycle .. 1 = fully in the pose (smoothed)
+    this.poseT = 0; // seconds in the current pose (drives the struggle / tug wobble)
+    this.shownPose = null; // pose being blended out after `pose` is cleared
     this.mesh = this.#buildMesh();
     this.setLook(look);
   }
@@ -260,6 +266,13 @@ export class Pedestrian {
     showBone(this.acc.gun, def !== null);
     // Longer, chunkier guns are the handgun stretched down the barrel (the arm's -Y axis).
     if (def?.model) this.acc.gun.scale.set(def.model.bulk, def.model.length, def.model.bulk);
+  }
+
+  /** Hold a scripted upper-body pose (see `pose`), or `null` to go back to the walk cycle. */
+  setPose(pose) {
+    if (pose === this.pose) return;
+    this.pose = pose;
+    if (pose) (this.shownPose = pose), (this.poseT = 0);
   }
 
   reset(x, z, heading = 0) {
@@ -411,6 +424,40 @@ export class Pedestrian {
     this.torso.position.y = 1.15 - 0.03 * r * s;
     this.torso.rotation.y = Math.cos(p) * (0.13 + 0.07 * r) * s;
     this.torso.rotation.z = -Math.sin(p) * (0.045 - 0.025 * r) * s;
+    this.#applyPose(dt);
+  }
+
+  /** Blend the scripted pose (if any) over the walk cycle just set up. */
+  #applyPose(dt) {
+    const want = this.pose && !this.isDown ? 1 : 0;
+    this.poseBlend += (want - this.poseBlend) * Math.min(1, (want ? 14 : 6) * dt);
+    this.poseT += dt;
+    if (this.poseBlend < 0.01 || !this.shownPose) return;
+    const b = this.poseBlend;
+    const t = this.poseT;
+    const mix = (obj, axis, v) => (obj.rotation[axis] += (v - obj.rotation[axis]) * b);
+    const [aL, aR, eL, eR, tor] = [this.armL, this.armR, this.elbowL, this.elbowR, this.torso];
+    if (this.shownPose === 'grab') {
+      // Both arms straight out, hands closing on the other person's shoulders, tugging.
+      const tug = Math.sin(t * 11) * 0.07;
+      mix(aL, 'x', -1.45 + tug), mix(aR, 'x', -1.45 - tug);
+      mix(aL, 'z', -0.22), mix(aR, 'z', 0.22);
+      mix(eL, 'x', -0.35), mix(eR, 'x', -0.35);
+      mix(tor, 'x', 0.22), mix(tor, 'y', Math.sin(t * 7) * 0.1), mix(tor, 'z', 0);
+    } else if (this.shownPose === 'grabbed') {
+      // Thrashing: elbows up, shoulders twisting hard, leaning back out of the grip.
+      const wr = Math.sin(t * 9);
+      mix(aL, 'x', -1.1 + Math.sin(t * 13) * 0.45), mix(aR, 'x', -1.1 - Math.sin(t * 13) * 0.45);
+      mix(aL, 'z', 0.55), mix(aR, 'z', -0.55);
+      mix(eL, 'x', -1.5), mix(eR, 'x', -1.5);
+      mix(tor, 'x', -0.14), mix(tor, 'y', wr * 0.45), mix(tor, 'z', Math.sin(t * 6) * 0.08);
+    } else if (this.shownPose === 'cuffed') {
+      // Hands pinned behind the back, head bowed.
+      mix(aL, 'x', 0.55), mix(aR, 'x', 0.55);
+      mix(aL, 'z', -0.12), mix(aR, 'z', 0.12);
+      mix(eL, 'x', -0.25), mix(eR, 'x', -0.25);
+      mix(tor, 'x', 0.18), mix(tor, 'y', 0), mix(tor, 'z', 0);
+    }
   }
 
   /** One leg at gait phase `p` (0 = this foot striking the ground, PI = pushing off behind). */

@@ -126,7 +126,13 @@ Crimes raise a 0–5 star wanted level (top right): running people over (cops co
 ramming patrol cars, stealing a police car, and carjacking where a cop can see you. While the police
 chase you the level creeps up. Patrol cars (sirens flashing) come at you from out of view, cut you off and
 ram you. Stop, or go on foot, and an officer jumps out to make the arrest. Beat cops nearby join in on foot.
-Get caught and you're **BUSTED**: you lose the car and walk out of the **police station** with a clean record. To get away, break
+An officer who reaches you **grabs hold of you** (dragging you out of a stopped car first), and you can
+**resist arrest**: a red bar with a green zone appears, and an arrow sweeps back and forth across it. Hit
+**Space** (or click) with the arrow in the green and you shove the officer to the ground and get a couple of
+seconds' head start before anyone can grab you again. Miss, or take too long, and they get the cuffs on:
+you're **BUSTED**, lose the car and walk out of the **police station** with a clean record. Each time you
+resist while you're wanted, the next attempt is harder: a narrower green zone and a faster arrow (it resets
+once you lose the cops or get busted). To get away, break
 line of sight and keep your distance. The stars flash, and a bar fills until the police give up.
 
 ## The city
@@ -225,7 +231,8 @@ the ink pass so they don't get outlined.
 - `src/player/PlayerController.js` – player state: driving vs on foot, entering/exiting/hijacking cars
 - `src/physics/pedCollisions.js` – people vs cars (shoved, or knocked down by fast impacts) and people vs people
 - `src/police/Wanted.js` – crimes → heat → stars; evasion timer while out of sight
-- `src/police/PoliceSystem.js` – spawns/retires patrol cars by wanted level, pulls patrol cars out of traffic, deploys officers, sends beat cops after you, decides arrests
+- `src/police/PoliceSystem.js` – spawns/retires patrol cars by wanted level, pulls patrol cars out of traffic, deploys officers, sends beat cops after you, grabs you (officer and suspect locked together, with grab / struggle / cuffed poses from `Pedestrian.setPose`) and decides arrests
+- `src/police/ResistMinigame.js` – the resist-arrest mini-game: green-zone bar, sweeping arrow, difficulty per attempt
 - `src/police/PursuitDriver.js` – police driving: shortest-route navigation over the road graph toward you, then straight at you (leading your movement) when in view; three-point turns and backing out when stuck
 - `src/police/sight.js` – line-of-sight test against buildings
 - `src/missions/MissionSystem.js` – jobs from ringing pay phones (deliveries: take a van to a warehouse), markers, HUD panel, objective arrow, GPS route, pay

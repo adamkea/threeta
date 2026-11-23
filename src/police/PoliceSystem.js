@@ -11,8 +11,12 @@ const CAR_SIGHT = 70; // how far a patrol car can spot the player (with a clear 
 const FOOT_SIGHT = 35;
 const FOOT_GIVE_UP = 55; // cops on foot stop chasing beyond this
 const DEPLOY_RANGE = 13; // officer jumps out when the car is this close to a slow/on-foot player
-const BUST_RANGE = 1.5; // cop this close to a person on foot is making the arrest
-const BUST_TIME = 0.9; // seconds of contact needed
+const BUST_RANGE = 1.5; // cop this close to a person on foot grabs them
+const GRAB_GAP = 1.05; // distance between officer and suspect while holding them (arms' length)
+const LUNGE_TIME = 0.45; // seconds for the officer to close in and get a grip
+const BREAK_FREE_GRACE = 2.5; // after shaking off an officer, seconds before anyone can grab you again
+const SHOVE = 6.5; // m/s an officer is thrown back when you break free
+const CROWD = 2.4; // other officers hang back this far while one is making the arrest
 const COP_RUN = 1.08; // cops run slightly faster than the player, so a foot chase can be lost only by breaking sight
 const HEAR_RANGE = 18; // a chasing car this close keeps track of the player even without a clear view
 const DISPATCH_EVERY = 5; // seconds between radio updates of the player's position to units that lost sight
@@ -39,8 +43,14 @@ export class PoliceSystem {
     this.npcs = npcs;
     this.units = []; // { car, driver, state: 'chase'|'deployed'|'idle', officer, cooldown }
     this.pool = [];
-    this.bustTime = 0;
     this.busted = false;
+    /**
+     * An officer has hold of the player: { cop, stage: 'lunge'|'hold'|'cuffed', t, from, dir }.
+     * 'hold' is when the resist mini-game runs (see resolveGrab).
+     */
+    this.grab = null;
+    this.resists = 0; // resist attempts this time you're wanted (each one is harder)
+    this.grace = 0; // > 0: just broke free, nobody can grab you yet
     this.combat = null; // CombatSystem, once it exists (lets officers shoot)
   }
 
@@ -104,8 +114,10 @@ export class PoliceSystem {
 
   /** Everyone stands down (wanted level cleared or player busted). */
   standDown() {
-    this.bustTime = 0;
     this.busted = false;
+    this.#endGrab();
+    this.resists = 0;
+    this.grace = 0;
     for (const u of this.units) {
       u.state = 'idle';
       u.car.siren = false;
@@ -122,6 +134,8 @@ export class PoliceSystem {
     const tp = target.position;
     const playerSlow = !player.inVehicle || target.speed < 3;
     const hunting = wanted.stars > 0 && !this.busted && !(!player.inVehicle && player.ped.dead);
+    this.grace = Math.max(0, this.grace - dt);
+    if (this.grab) this.#stepGrab(dt, player, hunting);
 
     for (const u of this.units) {
       const car = u.car;
@@ -196,12 +210,12 @@ export class PoliceSystem {
     }
 
     // --- Cops on foot ---
-    let arresting = false;
     for (const n of this.npcs.active) {
       if (n.role !== 'cop') continue;
       const p = n.ped;
       const d = p.position.distanceTo(tp);
       const ownUnit = n.unit && this.units.includes(n.unit) ? n.unit : null;
+      if (this.grab?.cop === n) continue; // holding the suspect: driven by #stepGrab
       if (!hunting) {
         if (n.busy) this.npcs.release(n);
         continue;
@@ -217,19 +231,92 @@ export class PoliceSystem {
         this.npcs.release(n);
         continue;
       }
+      if (this.grab) {
+        // Someone else has the suspect: close in and stand round them, guns away.
+        if (n.weapon) (n.weapon = null), p.setWeapon(null);
+        n.goal = d > CROWD ? tp : null;
+        continue;
+      }
       if (!ownUnit?.returning) n.goal = tp;
       if (p.isDown || n.goal !== tp) continue;
       this.#shootAt(n, d, dt, { player, wanted, world });
 
-      // Arrest: right next to someone on foot, or at the door of a car that's stopped.
+      // Grab: right next to someone on foot, or at the door of a car that's stopped (they get
+      // dragged out first).
+      if (this.grace > 0) continue;
+      let reach = d < BUST_RANGE;
       if (player.inVehicle) {
-        const reach = target.cfg.width / 2 + 1.2;
-        const inCarReach = target.speed < 1.5 && d < Math.max(reach, target.cfg.length / 2 + 0.6);
-        if (inCarReach) arresting = true;
-      } else if (d < BUST_RANGE) arresting = true;
+        const r = Math.max(target.cfg.width / 2 + 1.2, target.cfg.length / 2 + 0.6);
+        reach = target.speed < 1.5 && d < r;
+      }
+      if (reach) this.#startGrab(n, player, world);
     }
-    this.bustTime = arresting ? this.bustTime + dt : Math.max(0, this.bustTime - dt * 2);
-    if (this.bustTime > BUST_TIME && hunting) this.busted = true;
+  }
+
+  /** An officer gets hold of the player (pulling them out of their car if need be). */
+  #startGrab(n, player, world) {
+    if (player.inVehicle) player.forceExit(world);
+    const me = player.ped;
+    const from = n.ped.position.clone();
+    const dir = from.clone().sub(me.position);
+    if (dir.lengthSq() < 1e-4) dir.set(Math.sin(me.heading), Math.cos(me.heading));
+    dir.normalize();
+    if (n.weapon) (n.weapon = null), n.ped.setWeapon(null);
+    n.goal = null;
+    n.ped.setPose('grab');
+    me.setPose('grabbed');
+    this.grab = { cop: n, suspect: me, stage: 'lunge', t: 0, from, dir };
+  }
+
+  /** Keep the officer and suspect locked together; let go if the officer's taken out. */
+  #stepGrab(dt, player, hunting) {
+    const g = this.grab;
+    const cop = g.cop.ped;
+    const me = player.ped;
+    const lost = !g.cop.active || cop.isDown || player.inVehicle || me.dead;
+    if (lost || (!hunting && !this.busted)) return this.#endGrab();
+    g.t += dt;
+    if (g.stage === 'lunge' && g.t >= LUNGE_TIME) (g.stage = 'hold'), (g.t = 0);
+    // Officer squares up at arm's length; suspect is held facing them.
+    const k = g.stage === 'lunge' ? Math.min(1, g.t / LUNGE_TIME) : 1;
+    const hx = me.position.x + g.dir.x * GRAB_GAP;
+    const hz = me.position.y + g.dir.y * GRAB_GAP;
+    cop.position.set(g.from.x + (hx - g.from.x) * k, g.from.y + (hz - g.from.y) * k);
+    cop.velocity.set(0, 0);
+    me.velocity.set(0, 0);
+    g.cop.goal = null;
+    cop.heading = Math.atan2(-g.dir.x, -g.dir.y);
+    // The suspect jerks about in the grip; once cuffed they stand still.
+    const jerk = g.stage === 'cuffed' ? 0 : Math.sin(g.t * 9) * 0.25;
+    me.heading = Math.atan2(g.dir.x, g.dir.y) + jerk;
+  }
+
+  /** The resist mini-game's verdict: shove the officer off, or get cuffed (busted). */
+  resolveGrab(brokeFree) {
+    const g = this.grab;
+    if (!g || g.stage === 'cuffed') return;
+    if (brokeFree) {
+      this.#endGrab();
+      g.cop.ped.knockDown(g.dir.clone().multiplyScalar(SHOVE), 1.8);
+      this.grace = BREAK_FREE_GRACE;
+    } else {
+      g.stage = 'cuffed';
+      g.suspect.setPose('cuffed');
+      this.busted = true;
+    }
+  }
+
+  /** Is the resist mini-game due right now (officer has a firm grip, verdict not in)? */
+  get resistDue() {
+    return this.grab?.stage === 'hold';
+  }
+
+  #endGrab() {
+    const g = this.grab;
+    this.grab = null;
+    if (!g) return;
+    g.cop.ped.setPose(null);
+    g.suspect.setPose(null);
   }
 
   /** An officer chasing on foot opens fire at a dangerous suspect who's also on foot. */
