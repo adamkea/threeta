@@ -269,3 +269,51 @@ html, body {
   filter: drop-shadow(0 0 0 #14110f) drop-shadow(2px 2px 0 #14110f) drop-shadow(-1px -1px 0 #14110f);
 }
 #objective-arrow.van { border-left-color: #4fb3ff; }
+
+/* Resisting arrest: stop the arrow in the green zone. */
+#resist {
+  position: absolute; left: 50%; top: 62%; transform: translateX(-50%);
+  width: min(420px, calc(100vw - 32px)); text-align: center;
+  display: none;
+}
+#resist.on { display: block; }
+#resist .label {
+  font-size: 34px; font-weight: 900; font-style: italic; letter-spacing: 1px; color: #ffd23a;
+  -webkit-text-stroke: 2px #14110f; paint-order: stroke fill; text-shadow: 3px 3px 0 #14110f;
+  margin-bottom: 8px; transform: rotate(-2deg);
+}
+#resist .bar {
+  position: relative; height: 30px; border: 3px solid #14110f; border-radius: 5px;
+  background: linear-gradient(#ff5a4a, #c8241c); box-shadow: 4px 4px 0 #14110f;
+}
+#resist .zone {
+  position: absolute; top: 0; bottom: 0;
+  background: linear-gradient(#7be86a, #3fb83a);
+  border-left: 3px solid #14110f; border-right: 3px solid #14110f;
+}
+#resist .arrow {
+  position: absolute; top: -16px; width: 0; height: calc(100% + 26px);
+  border-left: 3px solid #fff; filter: drop-shadow(2px 2px 0 #14110f);
+  transform: translateX(-1.5px);
+}
+#resist .arrow::before {
+  content: ''; position: absolute; left: -11px; top: -2px;
+  border: 9.5px solid transparent; border-top: 13px solid #fff; border-bottom: 0;
+}
+#resist .timer {
+  margin: 10px auto 0; height: 6px; width: 70%; background: #14110f; border-radius: 3px; overflow: hidden;
+}
+#resist .timer::after {
+  content: ''; display: block; height: 100%; width: calc(100% * var(--left, 1)); background: #ffd23a;
+}
+#resist .hint {
+  margin-top: 6px; font-size: 14px; font-weight: 700;
+  -webkit-text-stroke: 1px #14110f; paint-order: stroke fill; text-shadow: 1px 1px 0 #14110f;
+}
+#resist.win .label { color: #7be86a; }
+#resist.win .bar { animation: resist-pop .45s ease-out; }
+#resist.lose .label { color: #ff4a3a; }
+#resist.lose .bar { animation: resist-shake .45s linear; }
+#resist.win .timer, #resist.lose .timer, #resist.win .hint, #resist.lose .hint { visibility: hidden; }
+@keyframes resist-pop { 30% { transform: scale(1.08); } }
+@keyframes resist-shake { 20%, 60% { transform: translateX(-6px); } 40%, 80% { transform: translateX(6px); } }

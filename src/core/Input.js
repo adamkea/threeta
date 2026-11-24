@@ -13,6 +13,7 @@ const BINDINGS = {
   weapon: ['KeyQ'], // draw / holster / cycle weapons
   reload: ['KeyE'],
   back: ['Escape', 'Backspace'], // close menus
+  resist: ['Space', 'Mouse0'], // stop the arrow when resisting arrest
 };
 
 const isTextField = (el) => el instanceof HTMLElement && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA');

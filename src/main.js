@@ -19,6 +19,7 @@ import { InkRenderer } from './render/InkRenderer.js';
 import { SkidMarks } from './effects/SkidMarks.js';
 import { Wanted } from './police/Wanted.js';
 import { PoliceSystem } from './police/PoliceSystem.js';
+import { ResistMinigame } from './police/ResistMinigame.js';
 import { CityMap } from './ui/CityMap.js';
 import { weaponIcon } from './ui/weaponIcons.js';
 import { CombatSystem } from './combat/CombatSystem.js';
@@ -225,6 +226,7 @@ const promptEl = document.getElementById('prompt');
 const wantedEl = document.getElementById('wanted');
 const starEls = [...wantedEl.querySelectorAll('i')];
 const bannerEl = document.getElementById('banner');
+const resist = new ResistMinigame(document.getElementById('resist'));
 const cityMap = new CityMap(city, document.getElementById('map'));
 const healthEl = document.getElementById('health');
 const hurtEl = document.getElementById('hurt');
@@ -291,7 +293,7 @@ function step(dt) {
   // Neighbour grids for the AI (positions at the start of the step)...
   near.rebuild(active, peds, peds.filter(onRoad));
   updateRiders(cars);
-  player.step(dt, bustedTimer > 0 || shops.busy ? NO_INPUT : input, world);
+  player.step(dt, bustedTimer > 0 || shops.busy || police.grab ? NO_INPUT : input, world);
   traffic.step(dt, near, world);
   police.step(dt, policeCtx);
   npcs.step(dt, world, peds, near, lights);
@@ -329,6 +331,15 @@ function finishArrest() {
   traffic.repopulate(focus, allCars());
   npcs.repopulate(focus);
   parked.manage(focus, allCars(), disposeObject, 0);
+}
+
+/** Grabbed by an officer: run the resist mini-game, harder each time while you're wanted. */
+function updateResist(dt) {
+  if (police.resistDue && !resist.active) resist.start(police.resists++);
+  if (!resist.active) return;
+  if (!police.grab) return resist.cancel(); // the officer lost their grip some other way
+  const verdict = resist.update(dt, input.wasPressed('resist'));
+  if (verdict) police.resolveGrab(verdict === 'win');
 }
 
 function updateWanted(dt) {
@@ -387,7 +398,7 @@ function updateCombatHud(dt) {
     shownIconDef = iconDef;
   }
   weaponAmmoEl.innerHTML = w ? `${w.mag}<small>/${w.reserve}</small>` : '<small>Q — draw</small>';
-  canvas.style.cursor = player.armed && bustedTimer === 0 && !shops.inside ? 'crosshair' : '';
+  canvas.style.cursor = player.armed && bustedTimer === 0 && !police.grab && !shops.inside ? 'crosshair' : '';
   if (player.money !== shownMoney) {
     if (shownMoney !== null) {
       moneyEl.classList.toggle('flash', false);
@@ -552,7 +563,7 @@ devConsole.register('stats', 'stats [on | off] — keep the performance overlay 
 
 // Dev-only hook for debugging / automated tests.
 if (import.meta.env.DEV) {
-  window.__game = { missions, shops, policeCtx, parked, skids, player, traffic, npcs, lights, world, allCars, allPeds, step, input, wanted, police, combat, damage, rig, city, devConsole, STEP: 1 / 120 };
+  window.__game = { resist, missions, shops, policeCtx, parked, skids, player, traffic, npcs, lights, world, allCars, allPeds, step, input, wanted, police, combat, damage, rig, city, devConsole, STEP: 1 / 120 };
 }
 
 // --- Main loop: fixed-step physics, variable-rate rendering ---
@@ -567,7 +578,7 @@ function frame(now) {
   perf.beginFrame(dt);
 
   shops.update(dt, input); // before the F key is handled below, so opening the menu doesn't also buy
-  if (bustedTimer === 0 && !shops.busy) {
+  if (bustedTimer === 0 && !shops.busy && !police.grab) {
     const inShop = !!shops.inside;
     if (input.wasPressed('use') && !shops.use() && (inShop || !missions.use())) player.use(allCars(), world);
     if (!inShop) {
@@ -634,6 +645,7 @@ function streetFrame(dt) {
   combat.update(dt);
   damage.update(dt, allCars(), rig.focus);
   traffic.manage(rig.focus, allCars());
+  updateResist(dt);
   updateWanted(dt);
   missions.update(dt, camera);
   police.manage(policeCtx, allCars());
@@ -653,6 +665,6 @@ function streetFrame(dt) {
   const what = canEnter?.isBike ? 'bike' : 'car';
   const carPrompt = canEnter ? (occupied ? `F — hijack ${what}` : canEnter.isBike ? 'F — get on' : 'F — get in') : '';
   const missionPrompt = bustedTimer > 0 ? '' : missions.prompt();
-  promptEl.textContent = bustedTimer > 0 ? '' : missionPrompt || (player.inVehicle ? '' : shops.prompt() || carPrompt);
+  promptEl.textContent = bustedTimer > 0 || police.grab ? '' : missionPrompt || (player.inVehicle ? '' : shops.prompt() || carPrompt);
 }
 requestAnimationFrame(frame);
